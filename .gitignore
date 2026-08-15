@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# venv / uv
+.venv/
+uv.lock.bak
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+*.json-report.json
+
+# Snapshots created by tools/snapshot.py at runtime
+.cartograph/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
