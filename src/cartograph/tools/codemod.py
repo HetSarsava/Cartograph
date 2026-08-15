@@ -11,11 +11,30 @@ implemented — see the TODO below).
 
 from __future__ import annotations
 
+import difflib
+import logging
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 import libcst as cst
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
+
+# Directories never walked when target_files isn't given explicitly.
+_SKIP_DIR_NAMES = {
+    ".git",
+    ".venv",
+    "venv",
+    "__pycache__",
+    "node_modules",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    "build",
+    "dist",
+    ".cartograph",
+}
 
 
 class CodemodAmbiguity(BaseModel):
@@ -101,28 +120,93 @@ def apply_codemod(
         target_files: Repo-relative paths to consider. If None, the recipe's
             `applies_to` is used to scan the whole repo for candidates.
 
+    Ambiguity policy: any file where `recipe.transform` reports one or more
+    `CodemodAmbiguity`s is left untouched on disk (all-or-nothing per file —
+    other, unambiguous files still get written). Ambiguities are always
+    collected into the returned result regardless of whether the file was
+    written.
+
     Returns:
         A `CodemodResult` describing what changed (or would have changed).
 
     Raises:
         KeyError: If `recipe_name` isn't registered.
-        NotImplementedError: Always, for now — see TODO below.
     """
     recipe = get_recipe(recipe_name)
     if recipe is None:
         raise KeyError(f"No recipe registered as {recipe_name!r}. Known: {list_recipes()}")
 
-    # TODO: implement the driver:
-    #   1. Resolve target_files (walk repo_path for *.py if None), parse each
-    #      with cst.parse_module(path.read_text()).
-    #   2. For each module where recipe.applies_to(...) is True, call
-    #      recipe.transform(...) and collect (new_module, ambiguities).
-    #   3. Decide an ambiguity-tolerance policy — e.g. "withhold writes for
-    #      any file that produced ambiguities, but still report them" is the
-    #      safe default; a stricter/looser policy can be a parameter later.
-    #   4. Write back accepted files (new_module.code), compute a unified
-    #      diff (difflib.unified_diff against the original text) for the
-    #      returned CodemodResult.diff.
-    #   5. Return CodemodResult with applied=True only if at least one file
-    #      was actually written.
-    raise NotImplementedError(f"apply_codemod: driver not yet implemented (recipe={recipe_name!r})")
+    root = Path(repo_path).resolve()
+    candidates = target_files if target_files is not None else list(_iter_relative_python_files(root))
+
+    files_changed: list[str] = []
+    ambiguities: list[CodemodAmbiguity] = []
+    diffs: list[str] = []
+
+    for rel_path in sorted(candidates):
+        abs_path = root / rel_path
+        try:
+            original_text = abs_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            ambiguities.append(
+                CodemodAmbiguity(file_path=rel_path, description=f"Could not read file: {exc}")
+            )
+            continue
+
+        try:
+            module = cst.parse_module(original_text)
+        except cst.ParserSyntaxError as exc:
+            ambiguities.append(
+                CodemodAmbiguity(file_path=rel_path, description=f"Could not parse file: {exc}")
+            )
+            continue
+
+        if not recipe.applies_to(rel_path, module):
+            continue
+
+        new_module, file_ambiguities = recipe.transform(rel_path, module)
+        if file_ambiguities:
+            logger.debug(
+                "[tool:apply_codemod] %s: %d ambiguity(ies), withholding write",
+                rel_path,
+                len(file_ambiguities),
+            )
+            ambiguities.extend(file_ambiguities)
+            continue
+
+        new_text = new_module.code
+        if new_text == original_text:
+            continue
+
+        abs_path.write_text(new_text, encoding="utf-8")
+        files_changed.append(rel_path)
+        diffs.append(
+            "".join(
+                difflib.unified_diff(
+                    original_text.splitlines(keepends=True),
+                    new_text.splitlines(keepends=True),
+                    fromfile=f"a/{rel_path}",
+                    tofile=f"b/{rel_path}",
+                )
+            )
+        )
+
+    return CodemodResult(
+        recipe_name=recipe_name,
+        applied=bool(files_changed),
+        files_changed=files_changed,
+        diff="\n".join(diffs) if diffs else None,
+        ambiguities=ambiguities,
+    )
+
+
+def _iter_relative_python_files(root: Path) -> list[str]:
+    if root.is_file():
+        return [root.name] if root.suffix == ".py" else []
+    results = []
+    for path in root.rglob("*.py"):
+        rel_parts = path.relative_to(root).parts[:-1]
+        if any(part in _SKIP_DIR_NAMES for part in rel_parts):
+            continue
+        results.append(path.relative_to(root).as_posix())
+    return results

@@ -9,9 +9,15 @@ plan one step at a time.
 
 from __future__ import annotations
 
+import logging
+
 from pydantic import BaseModel, Field
 
-from cartograph.providers.base import Provider
+from cartograph.providers.base import LLMMessage, Provider
+from cartograph.tools import recipes as _recipes  # noqa: F401 - registers built-in recipes
+from cartograph.tools.codemod import list_recipes
+
+logger = logging.getLogger(__name__)
 
 
 class PlanStep(BaseModel):
@@ -47,21 +53,70 @@ def run_planner(provider: Provider, request: PlannerRequest) -> PlannerResponse:
         request: Task description plus the relevant symbol set from Scout.
 
     Returns:
-        A `PlannerResponse` with an ordered list of `PlanStep`s.
+        A `PlannerResponse` with an ordered list of `PlanStep`s. Steps whose
+        `symbol_id` isn't actually in `request.relevant_symbol_ids`, or whose
+        `recipe_name` isn't a registered recipe, are dropped/cleared (and
+        logged) rather than trusted, since the model can hallucinate either.
     """
-    # TODO: build an LLMMessage list from request and call
-    # provider.complete_structured(messages, PlannerResponse). The prompt
-    # should mention tools.codemod.list_recipes() so the model can name a
-    # real recipe rather than inventing one.
-    del provider  # unused until the real call is wired up
-    return PlannerResponse(
-        steps=[
-            PlanStep(
-                symbol_id=symbol_id,
-                action="STUB: planner not yet implemented; no real action determined.",
-                recipe_name=None,
-            )
-            for symbol_id in request.relevant_symbol_ids
-        ],
-        summary="STUB: planner not yet implemented.",
+    available_recipes = list_recipes()
+    logger.debug(
+        "[planner] request task=%r relevant_count=%d available_recipes=%s",
+        request.task_description,
+        len(request.relevant_symbol_ids),
+        available_recipes,
     )
+
+    if not request.relevant_symbol_ids:
+        response = PlannerResponse(steps=[], summary="No relevant symbols; nothing to plan.")
+        logger.debug("[planner] response steps=0 summary=%r", response.summary)
+        return response
+
+    messages = [
+        LLMMessage(
+            role="system",
+            content=(
+                "You are Planner, the second agent in a code-migration pipeline. You are "
+                "given a task description and a list of symbol ids Scout flagged as "
+                "relevant. Produce an ordered list of steps, one per symbol (skip symbols "
+                "that don't actually need a change). For each step give: symbol_id (must be "
+                "exactly one of the given ids), action (a short plain-English description of "
+                "the required change), and recipe_name — set it to one of these registered "
+                f"codemod recipe names if it applies: {available_recipes}, or null if none "
+                "applies and the step needs a bespoke edit."
+            ),
+        ),
+        LLMMessage(
+            role="user",
+            content=(
+                f"Task: {request.task_description}\n\n"
+                "Relevant symbol ids:\n" + "\n".join(request.relevant_symbol_ids)
+            ),
+        ),
+    ]
+
+    raw_response = provider.complete_structured(messages, PlannerResponse)
+
+    relevant_set = set(request.relevant_symbol_ids)
+    recipe_set = set(available_recipes)
+    steps: list[PlanStep] = []
+    for step in raw_response.steps:
+        if step.symbol_id not in relevant_set:
+            logger.warning("[planner] dropped step for hallucinated symbol id: %s", step.symbol_id)
+            continue
+        if step.recipe_name is not None and step.recipe_name not in recipe_set:
+            logger.warning(
+                "[planner] step for %s named unknown recipe %r; clearing to None",
+                step.symbol_id,
+                step.recipe_name,
+            )
+            step = step.model_copy(update={"recipe_name": None})
+        steps.append(step)
+
+    response = PlannerResponse(steps=steps, summary=raw_response.summary)
+    logger.debug(
+        "[planner] response step_count=%d summary=%r steps=%s",
+        len(response.steps),
+        response.summary,
+        [(s.symbol_id, s.recipe_name) for s in response.steps],
+    )
+    return response

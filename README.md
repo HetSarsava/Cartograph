@@ -120,3 +120,17 @@ uv sync
 cp .env.example .env   # then fill in GROQ_API_KEY
 uv run pytest
 ```
+
+## Common tasks
+
+A `Makefile` covers the day-to-day commands; on Windows without `make`,
+`make.ps1` mirrors every target for PowerShell (`.\make.ps1 <target>`).
+
+```bash
+make setup       # uv sync
+make test        # full pytest suite, verbose
+make check       # lint + typecheck + test
+make run         # cartograph run against the sample fixture
+make mcp         # start the MCP server (stdio transport)
+make help        # full list
+```

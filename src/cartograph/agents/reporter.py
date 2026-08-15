@@ -8,9 +8,13 @@ Markdown report — what changed, what didn't, and why.
 
 from __future__ import annotations
 
+import logging
+
 from pydantic import BaseModel, Field
 
-from cartograph.providers.base import Provider
+from cartograph.providers.base import LLMMessage, Provider
+
+logger = logging.getLogger(__name__)
 
 
 class ReporterRequest(BaseModel):
@@ -42,16 +46,38 @@ def run_reporter(provider: Provider, request: ReporterRequest) -> ReporterRespon
     Returns:
         A `ReporterResponse` containing the Markdown report.
     """
-    # TODO: build an LLMMessage list from request and call
-    # provider.complete_text(...) (free-form Markdown, no schema needed).
-    del provider  # unused until the real call is wired up
-    status = "PASSED" if request.tests_passed else "FAILED"
-    return ReporterResponse(
-        report_markdown=(
-            f"# Run Report (STUB)\n\n"
-            f"**Task:** {request.task_description}\n\n"
-            f"**Final tests:** {status}\n\n"
-            f"**Steps:** {len(request.step_summaries)}\n\n"
-            "_Reporter agent not yet implemented; this is a placeholder summary._"
-        )
+    logger.debug(
+        "[reporter] request task=%r step_count=%d tests_passed=%s notes=%s",
+        request.task_description,
+        len(request.step_summaries),
+        request.tests_passed,
+        request.notes,
     )
+
+    status = "PASSED" if request.tests_passed else "FAILED"
+    messages = [
+        LLMMessage(
+            role="system",
+            content=(
+                "You are Reporter, the final agent in a code-migration pipeline. Write a "
+                "concise Markdown report of a completed run for a human reader: what changed, "
+                "what didn't, and why. Use headings and bullet points. Do not invent details "
+                "not present in the input — if a step's outcome is unclear, say so plainly."
+            ),
+        ),
+        LLMMessage(
+            role="user",
+            content=(
+                f"Task: {request.task_description}\n"
+                f"Final test status: {status}\n\n"
+                "Step summaries:\n" + ("\n".join(f"- {s}" for s in request.step_summaries) or "(none)")
+                + "\n\nNotes:\n"
+                + ("\n".join(f"- {n}" for n in request.notes) or "(none)")
+            ),
+        ),
+    ]
+
+    report_markdown = provider.complete_text(messages)
+    response = ReporterResponse(report_markdown=report_markdown)
+    logger.debug("[reporter] response length=%d chars", len(response.report_markdown))
+    return response

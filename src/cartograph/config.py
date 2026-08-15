@@ -32,6 +32,17 @@ class Settings(BaseSettings):
         validation_alias="CARTOGRAPH_MAX_LLM_CALLS_PER_RUN",
         description="Soft ceiling on LLM calls per pipeline run.",
     )
+    max_llm_calls_per_step: int = Field(
+        default=4,
+        ge=1,
+        validation_alias="CARTOGRAPH_MAX_LLM_CALLS_PER_STEP",
+        description=(
+            "Hard ceiling on LLM calls (Rewriter diagnosis + Adjudicator) for a single "
+            "plan step. Independent safety net: if a routing bug ever lets a step loop, "
+            "this forces it to finish (quarantined) instead of looping until a "
+            "provider-side quota does."
+        ),
+    )
     max_context_tokens: int = Field(
         default=8000,
         gt=0,

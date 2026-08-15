@@ -9,9 +9,13 @@ whole repo.
 
 from __future__ import annotations
 
+import logging
+
 from pydantic import BaseModel, Field
 
-from cartograph.providers.base import Provider
+from cartograph.providers.base import LLMMessage, Provider
+
+logger = logging.getLogger(__name__)
 
 
 class ScoutRequest(BaseModel):
@@ -41,12 +45,50 @@ def run_scout(provider: Provider, request: ScoutRequest) -> ScoutResponse:
 
     Returns:
         A `ScoutResponse` with the relevant subset and Scout's reasoning.
+        Any symbol id the model returns that isn't actually in
+        `request.candidate_symbol_ids` is dropped (and logged) rather than
+        trusted, since the model can hallucinate or slightly mangle ids.
     """
-    # TODO: build an LLMMessage list from request.task_description and
-    # request.candidate_symbol_ids (likely batched/paginated for large repos)
-    # and call provider.complete_structured(messages, ScoutResponse).
-    del provider  # unused until the real call is wired up
-    return ScoutResponse(
-        relevant_symbol_ids=list(request.candidate_symbol_ids),
-        reasoning="STUB: scout not yet implemented; returning all candidates unfiltered.",
+    logger.debug(
+        "[scout] request task=%r candidate_count=%d candidates=%s",
+        request.task_description,
+        len(request.candidate_symbol_ids),
+        request.candidate_symbol_ids,
     )
+
+    messages = [
+        LLMMessage(
+            role="system",
+            content=(
+                "You are Scout, the first agent in a code-migration pipeline. You are given "
+                "a task description and a list of candidate symbol ids (format: "
+                "'{file_path}::{qualified_name}'). Return only the subset of "
+                "candidate_symbol_ids that are relevant to the task — do not invent new ids, "
+                "only choose from the given list. If none are relevant, return an empty list."
+            ),
+        ),
+        LLMMessage(
+            role="user",
+            content=(
+                f"Task: {request.task_description}\n\n"
+                "Candidate symbol ids:\n" + "\n".join(request.candidate_symbol_ids)
+            ),
+        ),
+    ]
+
+    raw_response = provider.complete_structured(messages, ScoutResponse)
+
+    candidate_set = set(request.candidate_symbol_ids)
+    valid_ids = [sid for sid in raw_response.relevant_symbol_ids if sid in candidate_set]
+    dropped = [sid for sid in raw_response.relevant_symbol_ids if sid not in candidate_set]
+    if dropped:
+        logger.warning("[scout] dropped %d hallucinated symbol id(s): %s", len(dropped), dropped)
+
+    response = ScoutResponse(relevant_symbol_ids=valid_ids, reasoning=raw_response.reasoning)
+    logger.debug(
+        "[scout] response relevant_count=%d relevant=%s reasoning=%r",
+        len(response.relevant_symbol_ids),
+        response.relevant_symbol_ids,
+        response.reasoning,
+    )
+    return response

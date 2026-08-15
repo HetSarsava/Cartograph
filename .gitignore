@@ -26,6 +26,9 @@ htmlcov/
 # Snapshots created by tools/snapshot.py at runtime
 .cartograph/
 
+# Run transcripts from `cartograph run` (see logging_setup.py)
+logs/
+
 # Editors / OS
 .vscode/
 .idea/
