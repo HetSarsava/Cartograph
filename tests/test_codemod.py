@@ -236,3 +236,61 @@ def test_apply_codemod_skips_files_the_recipe_does_not_apply_to(tmp_path):
     assert result.applied is False
     assert result.files_changed == []
     assert result.ambiguities == []
+
+
+# --- path containment ---------------------------------------------------
+
+_UNITTEST_SOURCE = (
+    "import unittest\n\n"
+    "class T(unittest.TestCase):\n"
+    "    def test_a(self):\n"
+    "        self.assertEqual(1, 1)\n"
+)
+
+
+def test_apply_codemod_refuses_target_outside_repo_root(tmp_path):
+    """`target_files` is untrusted — it comes from LLM-generated plan steps
+    and straight off the wire from MCP clients. A `..` segment must not let a
+    write land outside the repo, where `tools.snapshot` couldn't roll it back.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    outside = tmp_path / "outside.py"
+    outside.write_text(_UNITTEST_SOURCE)
+
+    result = codemod.apply_codemod(repo, "unittest_to_pytest", target_files=["../outside.py"])
+
+    assert outside.read_text() == _UNITTEST_SOURCE  # untouched
+    assert result.applied is False
+    assert result.files_changed == []
+    assert len(result.ambiguities) == 1
+    assert "outside the repo root" in result.ambiguities[0].description
+
+
+def test_apply_codemod_refuses_absolute_target_outside_repo_root(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    outside = tmp_path / "outside.py"
+    outside.write_text(_UNITTEST_SOURCE)
+
+    result = codemod.apply_codemod(repo, "unittest_to_pytest", target_files=[str(outside)])
+
+    assert outside.read_text() == _UNITTEST_SOURCE
+    assert result.files_changed == []
+    assert len(result.ambiguities) == 1
+
+
+def test_apply_codemod_still_accepts_nested_targets_inside_the_repo(tmp_path):
+    """The containment check must not reject legitimate subdirectory paths."""
+    nested = tmp_path / "pkg" / "sub"
+    nested.mkdir(parents=True)
+    target = nested / "test_x.py"
+    target.write_text(_UNITTEST_SOURCE)
+
+    result = codemod.apply_codemod(
+        tmp_path, "unittest_to_pytest", target_files=["pkg/sub/test_x.py"]
+    )
+
+    assert result.applied is True
+    assert result.files_changed == ["pkg/sub/test_x.py"]
+    assert "assert 1 == 1" in target.read_text()

@@ -3,9 +3,9 @@
 Uses the official `mcp` Python SDK's high-level `MCPServer` server so any MCP
 client — not just this repo's LangGraph pipeline — can call these tools.
 This module is a thin adapter: all real logic lives in `graph/` and
-`tools/`, and none of it depends on LangGraph state. Stubbed tools
-(`apply_codemod`, `pack_context`) are registered too, so the server is fully
-wired up even though calling them currently raises `NotImplementedError`.
+`tools/`, and none of it depends on LangGraph state. The one still-stubbed
+tool (`pack_context`) is registered too, so the server is fully wired up
+even though calling it currently raises `NotImplementedError`.
 
 The server is stateless across calls: query tools take a `SymbolGraph` as an
 explicit argument rather than caching one server-side keyed by repo path.
@@ -91,17 +91,24 @@ def rollback(repo_path: str, snapshot_id: str) -> RollbackResult:
     return _rollback(repo_path, snapshot_id)
 
 
-# --- tools: codemods & context packing (stubbed) -------------------------
+# --- tools: codemods & context packing -----------------------------------
 
 
 @mcp.tool()
 def apply_codemod(
     repo_path: str, recipe_name: str, target_files: list[str] | None = None
 ) -> CodemodResult:
-    """Apply a registered codemod recipe to `repo_path`.
+    """Apply a registered codemod recipe to `repo_path`, writing changes to disk.
 
-    Not yet implemented — see `tools.codemod.apply_codemod`. Calling this
-    currently raises `NotImplementedError`.
+    `recipe_name` must be one of the registered recipes (e.g.
+    "unittest_to_pytest"). `target_files` are repo-relative paths; omit it to
+    let the recipe scan the whole repo. Paths resolving outside `repo_path`
+    are refused and reported as ambiguities.
+
+    A file whose rewrite is ambiguous is left untouched on disk and reported
+    in `ambiguities` — so an empty `ambiguities` means every candidate was
+    handled confidently. Take a `snapshot` first if you want to be able to
+    `rollback`.
     """
     return _apply_codemod(repo_path, recipe_name, target_files)
 

@@ -37,6 +37,24 @@ _SKIP_DIR_NAMES = {
 }
 
 
+def _resolve_within(root: Path, rel_path: str) -> Path | None:
+    """Resolve `rel_path` against `root`, or None if it escapes `root`.
+
+    `target_files` is not trusted input: it arrives from LLM-generated plan
+    steps (`agents.rewriter`) and straight off the wire from MCP clients. A
+    `..` segment or an absolute path would otherwise have `root / rel_path`
+    land outside the repo — and since `tools.snapshot` only captures the
+    repo's own working tree, such a write could not be rolled back.
+    """
+    try:
+        candidate = (root / rel_path).resolve()
+    except OSError:  # e.g. a path too long or otherwise unresolvable
+        return None
+    if candidate != root and root not in candidate.parents:
+        return None
+    return candidate
+
+
 class CodemodAmbiguity(BaseModel):
     """A construct a recipe found but wasn't confident it could safely rewrite.
 
@@ -118,7 +136,9 @@ def apply_codemod(
         repo_path: Root of the repo to modify.
         recipe_name: Name of a recipe registered via `register_recipe`.
         target_files: Repo-relative paths to consider. If None, the recipe's
-            `applies_to` is used to scan the whole repo for candidates.
+            `applies_to` is used to scan the whole repo for candidates. Paths
+            that resolve outside `repo_path` are never read or written — they
+            come back as an ambiguity instead.
 
     Ambiguity policy: any file where `recipe.transform` reports one or more
     `CodemodAmbiguity`s is left untouched on disk (all-or-nothing per file —
@@ -144,7 +164,20 @@ def apply_codemod(
     diffs: list[str] = []
 
     for rel_path in sorted(candidates):
-        abs_path = root / rel_path
+        abs_path = _resolve_within(root, rel_path)
+        if abs_path is None:
+            logger.warning(
+                "[tool:apply_codemod] refusing target outside repo root: %r (root=%s)",
+                rel_path,
+                root,
+            )
+            ambiguities.append(
+                CodemodAmbiguity(
+                    file_path=rel_path,
+                    description="Target path resolves outside the repo root; refusing to touch it.",
+                )
+            )
+            continue
         try:
             original_text = abs_path.read_text(encoding="utf-8")
         except OSError as exc:
