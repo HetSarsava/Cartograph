@@ -1,0 +1,485 @@
+<!--
+  Cartograph graph viewer — static HTML, inline CSS/JS, no build step, no
+  framework, no websocket. Polls a plain newline-delimited-JSON file (one
+  IndexEvent per line, written by cartograph.graph.event_sink.JsonlEventSink)
+  and renders the symbol graph growing live as graph.indexer.index_repo runs.
+
+  HOW TO RUN THIS (read before opening):
+
+  Do NOT open this file directly via a file:// URL. Browsers block fetch()
+  from a file:// page to a separate http://localhost origin (no
+  Access-Control-Allow-Origin header from Python's http.server, and file://
+  pages send Origin: null) — this is unreliable in Chrome in particular.
+
+  Instead, serve this whole repo over HTTP so the viewer and the .jsonl file
+  are on the SAME origin, which sidesteps CORS entirely:
+
+      1. cd to the Cartograph repo root (the directory containing viewer/ and logs/)
+      2. python -m http.server 8000
+      3. Open http://localhost:8000/viewer/graph_viewer.html
+      4. Generate events in another terminal:
+             cartograph index tests/fixtures/sample_repo --visualize
+         (prints the .jsonl path it's writing to, e.g. logs/graph-events-....jsonl)
+      5. Paste that path (relative, e.g. "logs/graph-events-....jsonl") into the
+         "Events file" field below and click Connect.
+
+  The page polls the file every 500ms and re-parses only the lines it
+  hasn't seen yet, so you can point it at a file that's still being written.
+-->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Cartograph Graph Viewer</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #1a1d24;
+    --border: #2a2e37;
+    --text: #e6e8eb;
+    --muted: #8a8f98;
+    --accent: #5b8cff;
+    --fn: #4c9f70;
+    --method: #4c7cf0;
+    --class: #e0a030;
+    --module: #b05fd1;
+    --edge-resolved: #6b7280;
+    --edge-unresolved: #b45050;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, Segoe UI, Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  #controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+  }
+  #controls input[type="text"] {
+    flex: 1 1 320px;
+    min-width: 220px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 6px 8px;
+    border-radius: 4px;
+    font-family: monospace;
+  }
+  button {
+    background: var(--accent);
+    border: none;
+    color: white;
+    padding: 6px 14px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  button.secondary {
+    background: var(--border);
+  }
+  button:disabled { opacity: 0.5; cursor: default; }
+  #progress { color: var(--muted); font-size: 13px; white-space: nowrap; }
+  #speedWrap { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+  #main {
+    display: flex;
+    height: calc(100vh - 52px);
+  }
+  #graph { flex: 1 1 auto; background: var(--bg); display: block; }
+  .node circle { stroke: #0f1115; stroke-width: 1.5px; cursor: pointer; }
+  .node text {
+    fill: var(--text);
+    font-size: 10px;
+    text-anchor: middle;
+    transform: translateY(-12px);
+    pointer-events: none;
+    user-select: none;
+  }
+  .edge.resolved { stroke: var(--edge-resolved); stroke-width: 1.4px; }
+  .edge.unresolved { stroke: var(--edge-unresolved); stroke-width: 1.2px; }
+  .unresolved-marker {
+    fill: var(--edge-unresolved);
+    font-size: 10px;
+    text-anchor: middle;
+    pointer-events: none;
+    user-select: none;
+  }
+  #sidepanel {
+    width: 300px;
+    flex: 0 0 300px;
+    background: var(--panel);
+    border-left: 1px solid var(--border);
+    padding: 14px;
+    overflow-y: auto;
+    font-size: 13px;
+  }
+  #sidepanel h3 { margin: 0 0 8px; font-size: 13px; text-transform: uppercase; color: var(--muted); letter-spacing: 0.05em; }
+  #sidepanel h3:not(:first-child) { margin-top: 20px; }
+  #details, #stats { color: var(--text); line-height: 1.6; }
+  #details .row, #stats .row { display: flex; justify-content: space-between; gap: 8px; }
+  #details .label, #stats .label { color: var(--muted); }
+  #details .doc { margin-top: 8px; color: var(--muted); font-style: italic; white-space: pre-wrap; }
+  .legend { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px; font-size: 12px; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 4px; }
+  .legend .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+</style>
+</head>
+<body>
+  <div id="controls">
+    <input id="url" type="text" placeholder="logs/graph-events-YYYYMMDDThhmmssZ.jsonl" />
+    <button id="connect">Connect</button>
+    <button id="pause" class="secondary" disabled>Pause</button>
+    <div id="speedWrap">
+      Delay/event:
+      <input id="speed" type="range" min="0" max="400" value="40" />
+      <span id="speedLabel">40ms</span>
+    </div>
+    <span id="progress">not connected</span>
+  </div>
+  <div id="main">
+    <svg id="graph"></svg>
+    <div id="sidepanel">
+      <h3>Symbol details</h3>
+      <div id="details">Click a node to see details.</div>
+      <h3>Stats</h3>
+      <div id="stats">—</div>
+      <h3>Legend</h3>
+      <div class="legend">
+        <span><span class="dot" style="background:var(--fn)"></span>function</span>
+        <span><span class="dot" style="background:var(--method)"></span>method</span>
+        <span><span class="dot" style="background:var(--class)"></span>class</span>
+        <span><span class="dot" style="background:var(--module)"></span>module</span>
+        <span>— resolved edge</span>
+        <span style="color:var(--edge-unresolved)">┄┄ unresolved (?)</span>
+      </div>
+    </div>
+  </div>
+
+<script>
+"use strict";
+const SVG_NS = "http://www.w3.org/2000/svg";
+const svg = document.getElementById("graph");
+const edgesLayer = document.createElementNS(SVG_NS, "g");
+const nodesLayer = document.createElementNS(SVG_NS, "g");
+svg.appendChild(edgesLayer);
+svg.appendChild(nodesLayer);
+
+let width = 0, height = 0;
+function resize() {
+  const rect = svg.getBoundingClientRect();
+  width = rect.width;
+  height = rect.height;
+}
+window.addEventListener("resize", resize);
+
+// --- state -----------------------------------------------------------
+let nodes = new Map();      // symbol id -> node record
+let edgeRecords = [];       // edge render records
+let seenLines = 0;
+let queue = [];              // events awaiting playback
+let pollTimer = null;
+let playing = true;
+let delayMs = 40;
+let playbackTimer = null;
+let filesTotal = null;
+let symbolCount = 0;
+let edgeCount = 0;
+let resolvedCount = 0;
+let unresolvedCount = 0;
+let finished = false;
+
+const KIND_COLOR = {
+  function: "var(--fn)",
+  method: "var(--method)",
+  class: "var(--class)",
+  module: "var(--module)",
+};
+
+function resetGraph() {
+  nodes.clear();
+  edgeRecords = [];
+  seenLines = 0;
+  queue = [];
+  symbolCount = 0;
+  edgeCount = 0;
+  resolvedCount = 0;
+  unresolvedCount = 0;
+  filesTotal = null;
+  finished = false;
+  edgesLayer.innerHTML = "";
+  nodesLayer.innerHTML = "";
+  document.getElementById("stats").textContent = "—";
+  document.getElementById("details").textContent = "Click a node to see details.";
+  setProgress("connected, waiting for events...");
+}
+
+function setProgress(text) {
+  document.getElementById("progress").textContent = text;
+}
+
+function escapeHtml(s) {
+  const div = document.createElement("div");
+  div.textContent = s == null ? "" : String(s);
+  return div.innerHTML;
+}
+
+// --- polling -----------------------------------------------------------
+async function poll(url) {
+  let text;
+  try {
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) {
+      setProgress(`fetch failed: HTTP ${res.status}`);
+      return;
+    }
+    text = await res.text();
+  } catch (err) {
+    setProgress(`fetch failed: ${err.message} (see console)`);
+    console.error("graph viewer: poll failed", err);
+    return;
+  }
+  const lines = text.split("\n").filter((l) => l.trim().length > 0);
+  if (lines.length > seenLines) {
+    for (const line of lines.slice(seenLines)) {
+      try {
+        queue.push(JSON.parse(line));
+      } catch (err) {
+        console.warn("graph viewer: skipping unparsable line", line, err);
+      }
+    }
+    seenLines = lines.length;
+  }
+  if (finished && pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+}
+
+function connect() {
+  const url = document.getElementById("url").value.trim();
+  if (!url) return;
+  resetGraph();
+  if (pollTimer) clearInterval(pollTimer);
+  document.getElementById("pause").disabled = false;
+  pollTimer = setInterval(() => poll(url), 500);
+  poll(url);
+}
+
+// --- playback loop (drains `queue` at `delayMs` per event) -----------
+function schedulePlayback() {
+  if (playbackTimer) return;
+  const step = () => {
+    if (playing && queue.length > 0) {
+      const ev = queue.shift();
+      renderEvent(ev);
+      playbackTimer = setTimeout(step, delayMs);
+    } else {
+      playbackTimer = setTimeout(step, 50);
+    }
+  };
+  playbackTimer = setTimeout(step, delayMs);
+}
+
+function renderEvent(ev) {
+  switch (ev.kind) {
+    case "file_started":
+      filesTotal = ev.files_total;
+      setProgress(`${ev.files_done} / ${ev.files_total} files — ${ev.file_path}`);
+      break;
+    case "symbol_discovered":
+      addNode(ev.symbol);
+      symbolCount++;
+      updateStats();
+      break;
+    case "file_finished":
+      break;
+    case "edge_resolution_started":
+      setProgress(`resolving call edges across ${ev.files_done} parsed files...`);
+      break;
+    case "edge_discovered":
+      addEdge(ev.edge);
+      edgeCount++;
+      if (ev.edge && ev.edge.target_id !== null) resolvedCount++; else unresolvedCount++;
+      updateStats();
+      break;
+    case "index_finished":
+      finished = true;
+      setProgress(`done — ${ev.files_done} / ${ev.files_total} files`);
+      updateStats();
+      break;
+  }
+}
+
+function updateStats() {
+  document.getElementById("stats").innerHTML = `
+    <div class="row"><span class="label">Symbols</span><span>${symbolCount}</span></div>
+    <div class="row"><span class="label">Edges</span><span>${edgeCount}</span></div>
+    <div class="row"><span class="label">— resolved</span><span>${resolvedCount}</span></div>
+    <div class="row"><span class="label">— unresolved</span><span>${unresolvedCount}</span></div>
+    ${finished ? '<div class="row" style="margin-top:6px;color:var(--accent)"><span>Index finished</span></div>' : ""}
+  `;
+}
+
+// --- graph rendering ---------------------------------------------------
+function addNode(symbol) {
+  if (nodes.has(symbol.id)) return;
+  const angle = Math.random() * Math.PI * 2;
+  const r = 40 + Math.random() * 120;
+  const node = {
+    id: symbol.id,
+    symbol,
+    x: width / 2 + Math.cos(angle) * r,
+    y: height / 2 + Math.sin(angle) * r,
+    vx: 0,
+    vy: 0,
+  };
+  const g = document.createElementNS(SVG_NS, "g");
+  g.setAttribute("class", "node");
+  const circle = document.createElementNS(SVG_NS, "circle");
+  circle.setAttribute("r", symbol.kind === "class" ? 9 : 7);
+  circle.setAttribute("fill", KIND_COLOR[symbol.kind] || "#999");
+  g.appendChild(circle);
+  const label = document.createElementNS(SVG_NS, "text");
+  label.textContent = symbol.name;
+  g.appendChild(label);
+  g.addEventListener("click", () => showDetails(symbol));
+  nodesLayer.appendChild(g);
+  node.el = g;
+  nodes.set(symbol.id, node);
+}
+
+function addEdge(edge) {
+  if (!edge) return;
+  const sourceNode = nodes.get(edge.source_id);
+  if (!sourceNode) return; // symbols always precede edges in the event stream
+  const resolved = edge.target_id !== null && nodes.has(edge.target_id);
+  const line = document.createElementNS(SVG_NS, "line");
+  line.setAttribute("class", "edge " + (resolved ? "resolved" : "unresolved"));
+  edgesLayer.appendChild(line);
+
+  const record = {
+    edge,
+    sourceNode,
+    targetNode: resolved ? nodes.get(edge.target_id) : null,
+    resolved,
+    el: line,
+    angleOffset: Math.random() * Math.PI * 2,
+  };
+
+  if (!resolved) {
+    const marker = document.createElementNS(SVG_NS, "text");
+    marker.textContent = "?";
+    marker.setAttribute("class", "unresolved-marker");
+    marker.setAttribute("title", `unresolved: ${edge.target_name}`);
+    nodesLayer.appendChild(marker);
+    record.markerEl = marker;
+  }
+  edgeRecords.push(record);
+}
+
+function showDetails(symbol) {
+  document.getElementById("details").innerHTML = `
+    <div class="row"><span class="label">Name</span><span>${escapeHtml(symbol.name)}</span></div>
+    <div class="row"><span class="label">Kind</span><span>${escapeHtml(symbol.kind)}</span></div>
+    <div class="row"><span class="label">File</span><span>${escapeHtml(symbol.file_path)}</span></div>
+    <div class="row"><span class="label">Lines</span><span>${symbol.line_start}–${symbol.line_end}</span></div>
+    <div class="row"><span class="label">Qualified</span><span>${escapeHtml(symbol.qualified_name)}</span></div>
+    ${symbol.docstring ? `<div class="doc">${escapeHtml(symbol.docstring)}</div>` : ""}
+  `;
+}
+
+// --- simple force-directed layout, no external library ------------------
+function tick() {
+  const arr = Array.from(nodes.values());
+  const REPULSION = 1800;
+  const SPRING_LEN = 90;
+  const SPRING_K = 0.02;
+  const CENTER_K = 0.008;
+  const DAMPING = 0.82;
+
+  for (const n of arr) { n.fx = 0; n.fy = 0; }
+
+  for (let i = 0; i < arr.length; i++) {
+    for (let j = i + 1; j < arr.length; j++) {
+      const a = arr[i], b = arr[j];
+      let dx = a.x - b.x, dy = a.y - b.y;
+      let distSq = dx * dx + dy * dy || 0.01;
+      let dist = Math.sqrt(distSq);
+      let force = REPULSION / distSq;
+      let fx = (dx / dist) * force, fy = (dy / dist) * force;
+      a.fx += fx; a.fy += fy;
+      b.fx -= fx; b.fy -= fy;
+    }
+  }
+
+  for (const rec of edgeRecords) {
+    if (!rec.resolved) continue;
+    const a = rec.sourceNode, b = rec.targetNode;
+    let dx = b.x - a.x, dy = b.y - a.y;
+    let dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+    let diff = dist - SPRING_LEN;
+    let fx = (dx / dist) * diff * SPRING_K, fy = (dy / dist) * diff * SPRING_K;
+    a.fx += fx; a.fy += fy;
+    b.fx -= fx; b.fy -= fy;
+  }
+
+  for (const n of arr) {
+    n.fx += (width / 2 - n.x) * CENTER_K;
+    n.fy += (height / 2 - n.y) * CENTER_K;
+  }
+
+  for (const n of arr) {
+    n.vx = (n.vx + n.fx) * DAMPING;
+    n.vy = (n.vy + n.fy) * DAMPING;
+    n.x = Math.min(width - 24, Math.max(24, n.x + n.vx));
+    n.y = Math.min(height - 24, Math.max(24, n.y + n.vy));
+    n.el.setAttribute("transform", `translate(${n.x},${n.y})`);
+  }
+
+  for (const rec of edgeRecords) {
+    const sx = rec.sourceNode.x, sy = rec.sourceNode.y;
+    rec.el.setAttribute("x1", sx);
+    rec.el.setAttribute("y1", sy);
+    if (rec.resolved) {
+      rec.el.setAttribute("x2", rec.targetNode.x);
+      rec.el.setAttribute("y2", rec.targetNode.y);
+    } else {
+      const tx = sx + Math.cos(rec.angleOffset) * 36;
+      const ty = sy + Math.sin(rec.angleOffset) * 36;
+      rec.el.setAttribute("x2", tx);
+      rec.el.setAttribute("y2", ty);
+      if (rec.markerEl) {
+        rec.markerEl.setAttribute("x", tx);
+        rec.markerEl.setAttribute("y", ty + 3);
+      }
+    }
+  }
+
+  requestAnimationFrame(tick);
+}
+
+// --- controls ------------------------------------------------------------
+document.getElementById("connect").addEventListener("click", () => {
+  connect();
+  schedulePlayback();
+});
+document.getElementById("pause").addEventListener("click", (e) => {
+  playing = !playing;
+  e.target.textContent = playing ? "Pause" : "Resume";
+});
+document.getElementById("speed").addEventListener("input", (e) => {
+  delayMs = Number(e.target.value);
+  document.getElementById("speedLabel").textContent = `${delayMs}ms`;
+});
+
+resize();
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>

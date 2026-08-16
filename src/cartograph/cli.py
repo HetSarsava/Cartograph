@@ -5,14 +5,21 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+from datetime import UTC, datetime
+from pathlib import Path
 
 import click
 
 from cartograph.config import get_settings
+from cartograph.graph.event_sink import JsonlEventSink
+from cartograph.graph.indexer import index_repo
+from cartograph.graph.models import SymbolGraph
+from cartograph.graph.tree_export import export_tree_html
 from cartograph.logging_setup import configure_logging
 from cartograph.pipeline.graph import build_graph
 from cartograph.pipeline.state import RunState
 from cartograph.providers.groq_provider import call_stats
+from cartograph.webui.server import DEFAULT_PORT, PortInUseError, bind, serve
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +92,118 @@ def run(repo_path: str, task: str, thread_id: str | None, log_level: str) -> Non
 
     _print_summary(final_state, duration_seconds, resolved_thread_id)
     click.echo(f"\nFull log: {log_path}")
+
+
+@cli.command(name="index")
+@click.argument("repo_path", type=click.Path(exists=True, file_okay=False))
+@click.option(
+    "--visualize",
+    is_flag=True,
+    default=False,
+    help=(
+        "Write a live newline-delimited-JSON event stream to ./logs/ as indexing "
+        "happens, for viewer/graph_viewer.html to poll and render incrementally."
+    ),
+)
+def index_cmd(repo_path: str, visualize: bool) -> None:
+    """Index REPO_PATH and print summary counts (symbols, edges, files).
+
+    Example:
+
+        cartograph index ./my-repo --visualize
+    """
+    sink: JsonlEventSink | None = None
+    if visualize:
+        timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        event_path = Path("logs") / f"graph-events-{timestamp}.jsonl"
+        sink = JsonlEventSink(event_path)
+        click.echo(f"Writing live index events to {event_path}")
+        click.echo(
+            "Open viewer/graph_viewer.html and point it at that file (see the file's "
+            "header comment for how) to watch the graph build live."
+        )
+
+    try:
+        graph = index_repo(repo_path, on_event=sink)
+    finally:
+        if sink is not None:
+            sink.close()
+
+    click.echo(_summary_line(repo_path, graph))
+    if sink is not None:
+        click.echo(f"Event file: {sink.path}")
+
+
+def _summary_line(repo_path: str, graph: SymbolGraph) -> str:
+    """One-line index summary, shared by `index` and `tree` so they can't drift."""
+    resolved = sum(1 for edge in graph.edges if edge.target_id is not None)
+    return (
+        f"Indexed {repo_path}: {len(graph.symbols)} symbols, {len(graph.edges)} edges "
+        f"({resolved} resolved, {len(graph.edges) - resolved} unresolved), "
+        f"{len(graph.files_indexed)} files indexed, {len(graph.files_skipped)} skipped"
+    )
+
+
+@cli.command(name="tree")
+@click.argument("repo_path", type=click.Path(exists=True, file_okay=False))
+@click.option(
+    "--output",
+    type=click.Path(dir_okay=False),
+    default=None,
+    help="Where to write the HTML file. Defaults to ./logs/tree-<timestamp>.html",
+)
+def tree_cmd(repo_path: str, output: str | None) -> None:
+    """Index REPO_PATH and write a standalone HTML dependency tree.
+
+    The output is a single self-contained file — open it by double-clicking,
+    no server needed.
+
+    Example:
+
+        cartograph tree ./my-repo
+    """
+    if output is None:
+        timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        output = str(Path("logs") / f"tree-{timestamp}.html")
+
+    graph = index_repo(repo_path)
+    written = export_tree_html(graph, output)
+
+    click.echo(_summary_line(repo_path, graph))
+    click.echo(f"\nWrote tree to: {written}")
+    click.echo(f"Open it:       {written.as_uri()}")
+
+
+@cli.command(name="serve")
+@click.option("--port", default=DEFAULT_PORT, show_default=True, help="Port to bind on localhost.")
+@click.option(
+    "--no-browser", is_flag=True, default=False, help="Don't open a browser automatically."
+)
+@click.option("--log-level", default="INFO", show_default=True, help="Logging level for the server.")
+def serve_cmd(port: int, no_browser: bool, log_level: str) -> None:
+    """Start the local web UI for indexing repos and browsing trees.
+
+    Binds to 127.0.0.1 only — this runs the indexer against local paths you
+    give it, so it is not safe to expose on a network.
+
+    Example:
+
+        cartograph serve --port 8765
+    """
+    configure_logging(level=log_level)
+
+    # Bind before announcing anything, so a taken port is a one-line message
+    # rather than a success banner followed by a traceback.
+    try:
+        httpd = bind(port)
+    except PortInUseError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    click.echo(f"Cartograph UI running at http://127.0.0.1:{port}/")
+    click.echo(f"Serving from: {Path.cwd()}")
+    click.echo("Press Ctrl+C to stop.")
+    serve(open_browser=not no_browser, httpd=httpd)
+    click.echo("\nStopped.")
 
 
 def _print_summary(final_state: dict, duration_seconds: float, thread_id: str) -> None:

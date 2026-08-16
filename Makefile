@@ -3,7 +3,7 @@
 # instead — it mirrors every target here.
 
 .PHONY: help setup dev test test-fast test-cov lint format typecheck check \
-        run mcp clean clean-logs
+        run serve tree mcp clean clean-logs
 
 TASK ?= convert unittest tests to pytest
 REPO ?= tests/fixtures/sample_repo
@@ -21,6 +21,8 @@ help:
 	@echo "  make check       lint + typecheck + test-fast"
 	@echo "  make run         cartograph run \$$(REPO) \"\$$(TASK)\""
 	@echo "                   override with: make run REPO=... TASK=\"...\""
+	@echo "  make serve       start the local web UI (http://127.0.0.1:8765)"
+	@echo "  make tree        build a standalone dependency tree for \$$(REPO)"
 	@echo "  make mcp         start the MCP server (stdio transport)"
 	@echo "  make clean       remove __pycache__/.pytest_cache/.ruff_cache/.mypy_cache"
 	@echo "  make clean-logs  remove logs/*.log"
@@ -53,6 +55,12 @@ check: lint typecheck test-fast
 
 run:
 	uv run cartograph run $(REPO) "$(TASK)"
+
+serve:
+	uv run cartograph serve
+
+tree:
+	uv run cartograph tree $(REPO)
 
 mcp:
 	uv run python -m cartograph.mcp_server.server

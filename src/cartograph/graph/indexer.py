@@ -10,12 +10,16 @@ downstream consumers can see what *couldn't* be figured out.
 
 from __future__ import annotations
 
+import itertools
+import time
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import tree_sitter_python as tspython
 from tree_sitter import Language, Node, Parser
 
+from cartograph.graph.events import IndexEvent, IndexEventKind
 from cartograph.graph.models import Edge, EdgeKind, Symbol, SymbolGraph, SymbolKind
 
 _PY_LANGUAGE = Language(tspython.language())
@@ -56,7 +60,10 @@ class _IndexAccumulator:
     files_skipped: list[str] = field(default_factory=list)
 
 
-def index_repo(repo_path: str | Path) -> SymbolGraph:
+def index_repo(
+    repo_path: str | Path,
+    on_event: Callable[[IndexEvent], None] | None = None,
+) -> SymbolGraph:
     """Walk `repo_path`, parse every `.py` file, and build a `SymbolGraph`.
 
     For each file: extract top-level and nested function/class definitions as
@@ -70,29 +77,96 @@ def index_repo(repo_path: str | Path) -> SymbolGraph:
 
     Args:
         repo_path: Path to the root of the repo (or subtree) to index.
+        on_event: Optional callback invoked with an `IndexEvent` at each
+            notable point during indexing (file/symbol/edge discovery), for
+            progress visualization or debugging. Purely an observability
+            hook — indexing behavior and the returned `SymbolGraph` are
+            identical whether or not this is passed.
 
     Returns:
         A `SymbolGraph` with all symbols and resolved/unresolved edges.
     """
     root = Path(repo_path).resolve()
     acc = _IndexAccumulator()
+    seq = itertools.count()
 
-    for file_path in sorted(_iter_python_files(root)):
+    all_files = sorted(_iter_python_files(root))
+    files_total = len(all_files)
+
+    for files_done, file_path in enumerate(all_files):
         rel_path = file_path.relative_to(root).as_posix()
+        if on_event:
+            on_event(
+                IndexEvent(
+                    kind=IndexEventKind.FILE_STARTED,
+                    seq=next(seq),
+                    timestamp=time.time(),
+                    file_path=rel_path,
+                    files_total=files_total,
+                    files_done=files_done,
+                )
+            )
+
         source = file_path.read_bytes()
         parser = Parser(_PY_LANGUAGE)
         tree = parser.parse(source)
         if tree.root_node.has_error:
             # Best-effort: a syntax error shouldn't take down the whole index.
             acc.files_skipped.append(rel_path)
-            continue
-        _walk_module(tree.root_node, source, rel_path, acc)
-        acc.files_indexed.append(rel_path)
+        else:
+            _walk_module(tree.root_node, source, rel_path, acc, on_event, seq)
+            acc.files_indexed.append(rel_path)
+
+        if on_event:
+            on_event(
+                IndexEvent(
+                    kind=IndexEventKind.FILE_FINISHED,
+                    seq=next(seq),
+                    timestamp=time.time(),
+                    file_path=rel_path,
+                )
+            )
+
+    if on_event:
+        on_event(
+            IndexEvent(
+                kind=IndexEventKind.EDGE_RESOLUTION_STARTED,
+                seq=next(seq),
+                timestamp=time.time(),
+                # files_total always means "files found", never "files
+                # successfully parsed" — a consumer rendering progress must
+                # not see the denominator shrink because a file was skipped.
+                files_total=files_total,
+                files_done=len(acc.files_indexed),
+            )
+        )
 
     by_bare_name = _build_bare_name_index(acc.symbols)
-    edges = [
-        _resolve_call_target(call, acc.symbols, by_bare_name) for call in acc.pending_calls
-    ]
+    edges: list[Edge] = []
+    for call in acc.pending_calls:
+        edge = _resolve_call_target(call, acc.symbols, by_bare_name)
+        edges.append(edge)
+        if on_event:
+            on_event(
+                IndexEvent(
+                    kind=IndexEventKind.EDGE_DISCOVERED,
+                    seq=next(seq),
+                    timestamp=time.time(),
+                    edge=edge,
+                )
+            )
+
+    files_done_total = len(acc.files_indexed) + len(acc.files_skipped)
+    if on_event:
+        on_event(
+            IndexEvent(
+                kind=IndexEventKind.INDEX_FINISHED,
+                seq=next(seq),
+                timestamp=time.time(),
+                files_total=files_total,
+                files_done=files_done_total,
+            )
+        )
 
     return SymbolGraph(
         root_path=str(root),
@@ -119,6 +193,8 @@ def _walk_module(
     source: bytes,
     rel_path: str,
     acc: _IndexAccumulator,
+    on_event: Callable[[IndexEvent], None] | None,
+    seq: Iterator[int],
 ) -> None:
     """Recursively visit a module's AST, recording symbols and pending calls.
 
@@ -134,6 +210,18 @@ def _walk_module(
       executable scope. Set when descending into a *method's* body (and
       only then), used purely to resolve `self.foo(...)` call sites.
     """
+
+    def _emit_symbol_discovered(symbol: Symbol) -> None:
+        if on_event:
+            on_event(
+                IndexEvent(
+                    kind=IndexEventKind.SYMBOL_DISCOVERED,
+                    seq=next(seq),
+                    timestamp=time.time(),
+                    symbol=symbol,
+                    file_path=rel_path,
+                )
+            )
 
     def visit(
         node: Node,
@@ -178,6 +266,7 @@ def _walk_module(
             parent_id=class_scope_id if is_method else None,
         )
         acc.symbols[symbol_id] = symbol
+        _emit_symbol_discovered(symbol)
         if body is not None:
             visit(
                 body,
@@ -212,6 +301,7 @@ def _walk_module(
             parent_id=None,
         )
         acc.symbols[symbol_id] = symbol
+        _emit_symbol_discovered(symbol)
         if body is not None:
             visit(body, [*name_stack, class_name], symbol_id, self_class_id, current_symbol_id)
 

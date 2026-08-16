@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+from cartograph.graph.events import IndexEvent, IndexEventKind
 from cartograph.graph.indexer import index_repo
 from cartograph.graph.models import SymbolKind
 
@@ -93,3 +94,120 @@ def test_index_single_file():
     graph = index_repo(FIXTURE_REPO / "sample_pkg" / "utils.py")
     qualified_names = {s.qualified_name for s in graph.symbols.values()}
     assert qualified_names == {"add", "double"}
+
+
+# --- on_event: optional progress/replay stream --------------------------
+
+
+def test_on_event_none_returns_identical_graph_to_before_this_change():
+    """Regression check: passing no callback (the default) must not change
+    index_repo()'s behavior or return value at all."""
+    graph_without_callback = index_repo(FIXTURE_REPO)
+
+    events: list[IndexEvent] = []
+    graph_with_callback = index_repo(FIXTURE_REPO, on_event=events.append)
+
+    assert graph_without_callback == graph_with_callback
+    # And the existing, unmodified assertions from above still hold for a
+    # plain on_event=None call — the callback path changes nothing.
+    qualified_names = {s.qualified_name for s in graph_without_callback.symbols.values()}
+    assert "add" in qualified_names
+    assert "Calculator.compute" in qualified_names
+
+
+def test_on_event_emits_file_started_and_finished_per_file():
+    events: list[IndexEvent] = []
+    graph = index_repo(FIXTURE_REPO, on_event=events.append)
+
+    started_files = {e.file_path for e in events if e.kind == IndexEventKind.FILE_STARTED}
+    finished_files = {e.file_path for e in events if e.kind == IndexEventKind.FILE_FINISHED}
+
+    all_files = set(graph.files_indexed) | set(graph.files_skipped)
+    assert all_files  # sanity: the fixture has files
+    assert started_files == all_files
+    assert finished_files == all_files
+
+
+def test_on_event_emits_symbol_discovered_for_every_symbol():
+    events: list[IndexEvent] = []
+    graph = index_repo(FIXTURE_REPO, on_event=events.append)
+
+    discovered_ids = {
+        e.symbol.id for e in events if e.kind == IndexEventKind.SYMBOL_DISCOVERED and e.symbol
+    }
+    assert discovered_ids == set(graph.symbols.keys())
+
+
+def test_on_event_emits_edge_discovered_for_every_edge_including_unresolved():
+    events: list[IndexEvent] = []
+    graph = index_repo(FIXTURE_REPO, on_event=events.append)
+
+    edge_events = [e for e in events if e.kind == IndexEventKind.EDGE_DISCOVERED]
+    emitted_edges = [e.edge for e in edge_events]
+    # Same edges, same order as the returned graph — unresolved ones included,
+    # not silently skipped.
+    assert emitted_edges == graph.edges
+
+    unresolved_in_graph = [edge for edge in graph.edges if edge.target_id is None]
+    unresolved_in_events = [edge for edge in emitted_edges if edge is not None and edge.target_id is None]
+    assert len(unresolved_in_events) == len(unresolved_in_graph)
+
+
+def test_on_event_index_finished_is_exactly_one_and_last_by_seq():
+    events: list[IndexEvent] = []
+    index_repo(FIXTURE_REPO, on_event=events.append)
+
+    finished = [e for e in events if e.kind == IndexEventKind.INDEX_FINISHED]
+    assert len(finished) == 1
+
+    last_by_seq = max(events, key=lambda e: e.seq)
+    assert last_by_seq.kind == IndexEventKind.INDEX_FINISHED
+    assert finished[0] is last_by_seq
+
+
+def test_on_event_seq_is_monotonic():
+    events: list[IndexEvent] = []
+    index_repo(FIXTURE_REPO, on_event=events.append)
+    seqs = [e.seq for e in events]
+    assert seqs == sorted(seqs)
+    assert len(seqs) == len(set(seqs))  # no duplicates
+
+
+def test_on_event_edge_resolution_started_comes_after_all_files_finished():
+    events: list[IndexEvent] = []
+    index_repo(FIXTURE_REPO, on_event=events.append)
+
+    last_file_finished_seq = max(
+        e.seq for e in events if e.kind == IndexEventKind.FILE_FINISHED
+    )
+    resolution_started = next(
+        e for e in events if e.kind == IndexEventKind.EDGE_RESOLUTION_STARTED
+    )
+    assert resolution_started.seq > last_file_finished_seq
+
+
+def test_files_total_is_consistent_across_all_events_when_a_file_is_skipped(tmp_path):
+    """`files_total` means "files found" everywhere it appears.
+
+    EDGE_RESOLUTION_STARTED previously reported the *parsed* file count in
+    that field, so a consumer drawing a progress bar saw the denominator
+    shrink mid-run whenever a file failed to parse.
+    """
+    (tmp_path / "good.py").write_text("def a():\n    b()\n\n\ndef b():\n    pass\n")
+    (tmp_path / "bad.py").write_text("def broken(:\n")
+
+    events = []
+    graph = index_repo(tmp_path, on_event=events.append)
+
+    assert graph.files_indexed == ["good.py"]
+    assert graph.files_skipped == ["bad.py"]
+
+    totals = {e.files_total for e in events if e.files_total is not None}
+    assert totals == {2}, f"files_total disagreed across events: {totals}"
+
+    resolution = next(e for e in events if e.kind is IndexEventKind.EDGE_RESOLUTION_STARTED)
+    assert resolution.files_total == 2  # found
+    assert resolution.files_done == 1  # parsed without error
+
+    finished = next(e for e in events if e.kind is IndexEventKind.INDEX_FINISHED)
+    assert (finished.files_done, finished.files_total) == (2, 2)

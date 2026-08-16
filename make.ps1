@@ -38,6 +38,8 @@ function Invoke-Check {
 }
 
 function Invoke-Run { uv run cartograph run $Repo $Task }
+function Invoke-Serve { uv run cartograph serve }
+function Invoke-Tree { uv run cartograph tree $Repo }
 function Invoke-Mcp { uv run python -m cartograph.mcp_server.server }
 
 function Invoke-Clean {
@@ -64,6 +66,8 @@ function Show-Help {
     Write-Host "  .\make.ps1 check       lint + typecheck + test-fast"
     Write-Host "  .\make.ps1 run         cartograph run <Repo> <Task>"
     Write-Host "                         override: .\make.ps1 run -Repo ... -Task '...'"
+    Write-Host "  .\make.ps1 serve       start the local web UI (http://127.0.0.1:8765)"
+    Write-Host "  .\make.ps1 tree        build a standalone dependency tree for <Repo>"
     Write-Host "  .\make.ps1 mcp         start the MCP server (stdio transport)"
     Write-Host "  .\make.ps1 clean       remove __pycache__/.pytest_cache/.ruff_cache/.mypy_cache"
     Write-Host "  .\make.ps1 clean-logs  remove logs\*.log"
@@ -80,6 +84,8 @@ switch ($Target) {
     "typecheck"  { Invoke-Typecheck }
     "check"      { Invoke-Check }
     "run"        { Invoke-Run }
+    "serve"      { Invoke-Serve }
+    "tree"       { Invoke-Tree }
     "mcp"        { Invoke-Mcp }
     "clean"      { Invoke-Clean }
     "clean-logs" { Invoke-CleanLogs }
