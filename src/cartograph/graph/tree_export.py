@@ -370,6 +370,26 @@ _HTML_TEMPLATE = """<!doctype html>
   button:hover { background: #343945; }
   #count { color: var(--muted); font-size: 12px; }
   main { padding: 10px 16px 40px; }
+  /* --- view toggle + diagram --- */
+  .viewsel { display: inline-flex; border: 1px solid var(--border); border-radius: 5px; overflow: hidden; }
+  .viewsel button {
+    border: none; border-radius: 0; margin: 0; background: transparent;
+    color: var(--muted); padding: 5px 12px; font-size: 12px; cursor: pointer;
+  }
+  .viewsel button.on { background: var(--panel); color: var(--text); }
+  .viewsel button + button { border-left: 1px solid var(--border); }
+  #diagram-wrap { display: none; position: relative; height: calc(100vh - 210px); min-height: 340px; }
+  #diagram { display: block; width: 100%; height: 100%; cursor: grab; background: var(--bg); }
+  #diagram .dnode.foldable { cursor: pointer; }
+  #diagram .dnode.foldable:hover circle { stroke-width: 2.5; }
+  #diagram-note {
+    position: absolute; left: 12px; bottom: 10px; font-size: 11.5px; color: var(--muted);
+    background: var(--panel); border: 1px solid var(--border); border-radius: 4px; padding: 4px 10px;
+    pointer-events: none;
+  }
+  #diagram-tools { position: absolute; right: 12px; top: 10px; display: flex; gap: 6px; }
+  #diagram-tools button { margin: 0; font-size: 11.5px; padding: 4px 10px; }
+
   ul { list-style: none; margin: 0; padding-left: 15px; }
   main > ul { padding-left: 0; }
   li.hidden { display: none; }
@@ -429,6 +449,10 @@ _HTML_TEMPLATE = """<!doctype html>
     <input id="filter" type="text" placeholder="Filter by name (substring)…" autocomplete="off" />
     <button id="expand">Expand all</button>
     <button id="collapse">Collapse all</button>
+    <span class="viewsel">
+      <button id="view-list" class="on">List</button>
+      <button id="view-diagram">Diagram</button>
+    </span>
     <span id="count"></span>
   </div>
   <div class="legend">
@@ -440,7 +464,18 @@ _HTML_TEMPLATE = """<!doctype html>
     <i style="color:var(--unresolved);font-style:italic">&rarr; unresolved ?</i>
   </div>
 </header>
-<main><ul id="tree"></ul></main>
+<main>
+  <ul id="tree"></ul>
+  <div id="diagram-wrap">
+    <svg id="diagram"></svg>
+    <div id="diagram-tools">
+      <button id="diagram-in">+</button>
+      <button id="diagram-out">&minus;</button>
+      <button id="diagram-fit">Fit</button>
+    </div>
+    <div id="diagram-note"></div>
+  </div>
+</main>
 
 <script>
 "use strict";
@@ -523,10 +558,14 @@ function buildNode(node) {
     li.appendChild(sub);
     rec.sub = sub;
     setOpen(rec, isOpenByDefault(node.kind));
-    tw.addEventListener("click", function () { setOpen(rec, rec.sub.style.display === "none"); });
+    tw.addEventListener("click", function () {
+      setOpen(rec, rec.sub.style.display === "none");
+      syncDiagram();
+    });
     row.addEventListener("click", function (e) {
       if (e.target === tw) return;
       setOpen(rec, rec.sub.style.display === "none");
+      syncDiagram();
     });
   }
   return rec;
@@ -557,6 +596,7 @@ function applyFilter(query) {
     }
     for (const r of roots) resetOpen(r);
     document.getElementById("count").textContent = rows.length + " nodes";
+    syncDiagram();
     return;
   }
   let hits = 0;
@@ -588,6 +628,7 @@ function applyFilter(query) {
   }
   for (const r of roots) walk(r);
   document.getElementById("count").textContent = hits + " matching";
+  syncDiagram();
 }
 
 function resetOpen(rec) {
@@ -603,11 +644,269 @@ document.getElementById("filter").addEventListener("input", function (e) {
 });
 document.getElementById("expand").addEventListener("click", function () {
   for (const rec of rows) setOpen(rec, true);
+  syncDiagram();
 });
 document.getElementById("collapse").addEventListener("click", function () {
   for (const rec of rows) setOpen(rec, false);
   for (const r of roots) setOpen(r, true);
+  syncDiagram();
 });
+
+/* ---------------- diagram view ----------------
+   A left-to-right node-link tree over the same records the list builds, so
+   the two views share expand state and the active filter with no second
+   source of truth: `rec.sub.style.display` says expanded, `.hidden` on the
+   <li> says filtered out. Clicking a node calls the list's own setOpen, so
+   switching views never loses your place.
+
+   Layout is the classic tidy-tree simplification: x is depth, and a node's y
+   is the midpoint of its children (leaves take the next free row). One pass,
+   no force simulation, deterministic. */
+
+var VIEW_NS = "http://www.w3.org/2000/svg";
+var COL_W = 210;      /* px between depth levels  */
+var ROW_H = 20;       /* px between sibling rows  */
+var MAX_DRAWN = 3000; /* refuse to draw past this rather than hang the tab */
+
+var view = { k: 1, tx: 0, ty: 0 };
+var viewMode = "list";
+var lastLayout = null;
+
+function isExpanded(rec) {
+  return !!rec.sub && rec.sub.style.display !== "none";
+}
+function isVisible(rec) {
+  return !rec.li.classList.contains("hidden");
+}
+
+function layoutDiagram() {
+  var nodes = [], links = [], row = 0;
+
+  function visit(rec, depth, parent) {
+    if (!isVisible(rec)) return null;
+    var me = { rec: rec, depth: depth, x: depth * COL_W, y: 0 };
+    nodes.push(me);
+    if (parent) links.push({ s: parent, t: me });
+
+    var placed = [];
+    if (isExpanded(rec)) {
+      for (var i = 0; i < rec.children.length; i++) {
+        var child = visit(rec.children[i], depth + 1, me);
+        if (child) placed.push(child);
+      }
+    }
+    if (placed.length) {
+      me.y = (placed[0].y + placed[placed.length - 1].y) / 2;
+    } else {
+      me.y = row * ROW_H;
+      row += 1;
+    }
+    return me;
+  }
+
+  for (var i = 0; i < roots.length; i++) visit(roots[i], 0, null);
+  return { nodes: nodes, links: links, rows: row };
+}
+
+function nodeColor(rec) {
+  if (rec.kind === "file") return "var(--file)";
+  if (rec.kind === "class") return "var(--class)";
+  if (rec.kind === "function") return "var(--function)";
+  if (rec.kind === "method") return "var(--method)";
+  if (rec.kind === "call") {
+    return rec.row.classList.contains("unresolved") ? "var(--unresolved)" : "var(--call)";
+  }
+  return "var(--muted)";
+}
+
+function svgEl(name, attrs) {
+  var e = document.createElementNS(VIEW_NS, name);
+  for (var k in attrs) e.setAttribute(k, attrs[k]);
+  return e;
+}
+
+function renderDiagram() {
+  var svg = document.getElementById("diagram");
+  var note = document.getElementById("diagram-note");
+  var layout = layoutDiagram();
+  lastLayout = layout;
+  svg.innerHTML = "";
+
+  if (!layout.nodes.length) {
+    note.textContent = "Nothing to draw — the filter matched no rows.";
+    return;
+  }
+  if (layout.nodes.length > MAX_DRAWN) {
+    note.textContent =
+      layout.nodes.length + " nodes expanded — too many to draw legibly. " +
+      "Collapse some, or filter, and it will render.";
+    return;
+  }
+  note.textContent =
+    layout.nodes.length + " nodes drawn · drag to pan, scroll to zoom, click a node to fold";
+
+  var g = svgEl("g", { id: "diagram-g" });
+  svg.appendChild(g);
+
+  var linkLayer = svgEl("g", { fill: "none", stroke: "var(--border)", "stroke-width": "1" });
+  g.appendChild(linkLayer);
+
+  for (var i = 0; i < layout.links.length; i++) {
+    var s = layout.links[i].s, t = layout.links[i].t;
+    var mid = (s.x + t.x) / 2;
+    linkLayer.appendChild(svgEl("path", {
+      d: "M " + s.x + " " + s.y + " C " + mid + " " + s.y + ", " + mid + " " + t.y +
+         ", " + t.x + " " + t.y,
+    }));
+  }
+
+  for (var n = 0; n < layout.nodes.length; n++) {
+    var item = layout.nodes[n];
+    var rec = item.rec;
+    var hasKids = rec.children.length > 0;
+    var open = isExpanded(rec);
+    var colour = nodeColor(rec);
+
+    var group = svgEl("g", {
+      transform: "translate(" + item.x + "," + item.y + ")",
+      class: "dnode" + (hasKids ? " foldable" : ""),
+    });
+
+    /* A filled dot means "collapsed, there is more under here". */
+    group.appendChild(svgEl("circle", {
+      r: hasKids ? 4.5 : 3,
+      fill: hasKids && !open ? colour : "var(--bg)",
+      stroke: colour,
+      "stroke-width": "1.5",
+    }));
+
+    var label = svgEl("text", {
+      x: 9, y: 3.5, "font-size": "11",
+      "font-family": "ui-monospace, SFMono-Regular, Consolas, monospace",
+      fill: colour,
+    });
+    var text = rec.raw;
+    if (rec.kind === "call") text = "→ " + text;
+    label.textContent = text.length > 30 ? text.slice(0, 29) + "…" : text;
+    group.appendChild(label);
+
+    if (hasKids && !open) {
+      var badge = svgEl("text", {
+        x: 9 + Math.min(text.length, 30) * 6.2 + 6, y: 3.5,
+        "font-size": "9.5", fill: "var(--muted)",
+        "font-family": "ui-monospace, SFMono-Regular, Consolas, monospace",
+      });
+      badge.textContent = "+" + rec.children.length;
+      group.appendChild(badge);
+    }
+
+    var tip = svgEl("title", {});
+    tip.textContent = rec.raw + (rec.kind ? "  ·  " + rec.kind : "");
+    group.appendChild(tip);
+
+    if (hasKids) {
+      group.addEventListener("click", foldHandler(rec));
+    }
+    g.appendChild(group);
+  }
+
+  applyTransform();
+}
+
+function foldHandler(rec) {
+  return function (ev) {
+    ev.stopPropagation();
+    setOpen(rec, !isExpanded(rec));
+    renderDiagram();
+  };
+}
+
+function applyTransform() {
+  var g = document.getElementById("diagram-g");
+  if (!g) return;
+  g.setAttribute(
+    "transform",
+    "translate(" + view.tx + "," + view.ty + ") scale(" + view.k + ")"
+  );
+}
+
+function fitDiagram() {
+  if (!lastLayout || !lastLayout.nodes.length) return;
+  var svg = document.getElementById("diagram");
+  var box = svg.getBoundingClientRect();
+  var maxX = 0, maxY = 0;
+  for (var i = 0; i < lastLayout.nodes.length; i++) {
+    if (lastLayout.nodes[i].x > maxX) maxX = lastLayout.nodes[i].x;
+    if (lastLayout.nodes[i].y > maxY) maxY = lastLayout.nodes[i].y;
+  }
+  maxX += 220; /* room for the widest label */
+  maxY += ROW_H;
+  var k = Math.min(box.width / Math.max(maxX, 1), box.height / Math.max(maxY, 1), 1);
+  view.k = Math.max(k, 0.08);
+  view.tx = 24;
+  view.ty = 18;
+  applyTransform();
+}
+
+function setView(mode) {
+  viewMode = mode;
+  var listOn = mode === "list";
+  document.getElementById("tree").style.display = listOn ? "" : "none";
+  document.getElementById("diagram-wrap").style.display = listOn ? "none" : "";
+  document.getElementById("view-list").classList.toggle("on", listOn);
+  document.getElementById("view-diagram").classList.toggle("on", !listOn);
+  if (!listOn) {
+    renderDiagram();
+    fitDiagram();
+  }
+}
+
+/* Re-render the diagram after anything that changes what should be shown. */
+function syncDiagram() {
+  if (viewMode === "diagram") renderDiagram();
+}
+
+document.getElementById("view-list").addEventListener("click", function () { setView("list"); });
+document.getElementById("view-diagram").addEventListener("click", function () { setView("diagram"); });
+document.getElementById("diagram-fit").addEventListener("click", fitDiagram);
+document.getElementById("diagram-in").addEventListener("click", function () {
+  view.k = Math.min(view.k * 1.25, 4); applyTransform();
+});
+document.getElementById("diagram-out").addEventListener("click", function () {
+  view.k = Math.max(view.k / 1.25, 0.05); applyTransform();
+});
+
+(function () {
+  var svg = document.getElementById("diagram");
+  var dragging = false, lastX = 0, lastY = 0;
+
+  svg.addEventListener("mousedown", function (e) {
+    dragging = true; lastX = e.clientX; lastY = e.clientY;
+    svg.style.cursor = "grabbing";
+  });
+  window.addEventListener("mouseup", function () {
+    dragging = false; svg.style.cursor = "";
+  });
+  window.addEventListener("mousemove", function (e) {
+    if (!dragging) return;
+    view.tx += e.clientX - lastX;
+    view.ty += e.clientY - lastY;
+    lastX = e.clientX; lastY = e.clientY;
+    applyTransform();
+  });
+  svg.addEventListener("wheel", function (e) {
+    e.preventDefault();
+    var box = svg.getBoundingClientRect();
+    var px = e.clientX - box.left, py = e.clientY - box.top;
+    var factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+    var next = Math.max(0.05, Math.min(4, view.k * factor));
+    /* Keep the point under the cursor fixed while zooming. */
+    view.tx = px - (px - view.tx) * (next / view.k);
+    view.ty = py - (py - view.ty) * (next / view.k);
+    view.k = next;
+    applyTransform();
+  }, { passive: false });
+})();
 </script>
 </body>
 </html>

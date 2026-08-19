@@ -25,9 +25,13 @@ def test_exports_self_contained_html_for_fixture_repo(tmp_path):
     assert "TREE_DATA" in html
     # A known symbol from the fixture made it into the embedded data.
     assert "compute_twice" in html
-    # Self-contained: no external requests of any kind.
-    assert "http://" not in html
-    assert "https://" not in html
+    # Self-contained: nothing is fetched over the network. Checked by
+    # what actually loads a resource rather than by the substring
+    # "http", since the SVG namespace is a URI and not a request.
+    for loader in ['src="http', "src='http", 'href="http', "href='http", "@import"]:
+        assert loader not in html, f"page would fetch something: {loader}"
+    assert "fetch(" not in html
+    assert "XMLHttpRequest" not in html
 
 
 def test_export_creates_parent_directories(tmp_path):
@@ -160,3 +164,30 @@ def test_placeholder_token_in_repo_content_does_not_corrupt_the_page(tmp_path):
     parsed = json.loads(payload.replace(r"<\/", "</"))
     assert parsed[0]["name"] == "__SUMMARY__.py"
     assert "files_indexed" not in payload
+
+
+def test_page_offers_both_a_list_and_a_diagram_view(tmp_path):
+    """The nested list is good for scanning; the node-link diagram is good
+    for seeing shape. Both ship in the one self-contained file."""
+    graph = index_repo(FIXTURE_REPO)
+
+    html = export_tree_html(graph, tmp_path / "tree.html").read_text(encoding="utf-8")
+
+    for element in ['id="view-list"', 'id="view-diagram"', 'id="diagram"', 'id="diagram-fit"']:
+        assert element in html, f"missing {element}"
+    # The diagram reads fold state from the list rather than keeping its own,
+    # so switching views never loses your place.
+    assert "function isExpanded(" in html
+    assert "function layoutDiagram(" in html
+
+
+def test_diagram_refuses_to_draw_an_unreadable_number_of_nodes(tmp_path):
+    """Expanding everything on a real repo is thousands of nodes. Drawing
+    that as SVG locks the tab, so the renderer bails with an explanation."""
+    graph = index_repo(FIXTURE_REPO)
+
+    html = export_tree_html(graph, tmp_path / "tree.html").read_text(encoding="utf-8")
+
+    assert "MAX_DRAWN" in html
+    assert "too many to draw" in html
+
