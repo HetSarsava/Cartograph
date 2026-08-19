@@ -128,6 +128,62 @@ PAGE = """<!doctype html>
   }
   @keyframes spin { to { transform: rotate(360deg); } }
 
+
+  /* --- inspector --- */
+  #inspect { display: none; }
+  #inspect.show { display: block; }
+  .split { display: grid; grid-template-columns: 300px 1fr; gap: 16px; align-items: start; }
+  @media (max-width: 820px) { .split { grid-template-columns: 1fr; } }
+  .results { max-height: 460px; overflow-y: auto; margin: 0; padding: 0; list-style: none; }
+  .results li {
+    padding: 7px 9px; border-radius: 5px; cursor: pointer; border: 1px solid transparent;
+  }
+  .results li:hover { background: #10141b; }
+  .results li.sel { background: #131a29; border-color: var(--accent-dim); }
+  .results .n { font-family: var(--mono); font-size: 12.5px; }
+  .results .f { color: var(--muted); font-size: 11px; font-family: var(--mono); word-break: break-all; }
+  .badge {
+    font-size: 10px; text-transform: uppercase; letter-spacing: .05em; padding: 1px 6px;
+    border-radius: 3px; border: 1px solid var(--border); color: var(--muted); margin-left: 6px;
+  }
+  .badge.k-class { color: #e0a030; border-color: #5a4520; }
+  .badge.k-function { color: #4c9f70; border-color: #2f5d45; }
+  .badge.k-method { color: #7ba3ff; border-color: #2d4a8a; }
+  .detail h3 { margin: 0 0 2px; font-size: 15px; font-family: var(--mono); }
+  .detail .where { color: var(--muted); font-family: var(--mono); font-size: 12px; margin-bottom: 10px; }
+  .detail .doc {
+    color: var(--muted); font-size: 12.5px; border-left: 2px solid var(--border);
+    padding-left: 10px; margin: 10px 0; white-space: pre-wrap;
+  }
+  .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; margin-top: 14px; }
+  .col h4 {
+    margin: 0 0 7px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+    color: var(--muted); font-weight: 600;
+  }
+  .col ul { list-style: none; margin: 0; padding: 0; max-height: 190px; overflow-y: auto; }
+  .col li { font-family: var(--mono); font-size: 11.5px; padding: 3px 0; word-break: break-all; }
+  .col li.link { cursor: pointer; color: var(--accent); }
+  .col li.link:hover { text-decoration: underline; }
+  .col li.mut { color: var(--muted); }
+  .why { color: var(--muted); font-size: 10.5px; font-family: inherit; display: block; padding-left: 10px; }
+  .why.ambiguous { color: var(--warn); }
+  .impact-head { display: flex; align-items: baseline; gap: 8px; }
+  .impact-n {
+    font-family: var(--mono); font-size: 18px; font-weight: 650; color: var(--warn);
+  }
+  .nbhd { margin-top: 14px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel2); }
+  .nbhd svg { display: block; width: 100%; height: 300px; }
+  .nbhd .cap { padding: 7px 11px; border-top: 1px solid var(--border); color: var(--muted); font-size: 11.5px; }
+  .lg { display: inline-flex; align-items: center; gap: 5px; margin-right: 12px; }
+  .lg i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+
+  /* --- insights --- */
+  .ins { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px; }
+  .ins .col ul { max-height: none; }
+  .ins .row2 { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+  .ins .row2 .c { color: var(--muted); font-size: 11px; flex: 0 0 auto; }
+  .bar { height: 3px; background: var(--accent-dim); border-radius: 2px; margin-top: 2px; }
+
   /* --- inline viewer --- */
   .viewer { margin-top: 16px; display: none; }
   .viewer.show { display: block; }
@@ -261,6 +317,26 @@ PAGE = """<!doctype html>
       <div class="cards" id="examples"><div class="empty">Loading&hellip;</div></div>
     </div>
 
+    <div class="panel no-zen" id="inspect">
+      <h2>Inspect a symbol</h2>
+      <div class="row" style="margin-bottom:14px">
+        <input id="q" type="text" spellcheck="false" autocomplete="off"
+               placeholder="Search functions, classes, methods&hellip;  (press s)" />
+      </div>
+      <div class="split">
+        <ul class="results" id="results"></ul>
+        <div class="detail" id="detail">
+          <div class="empty">Pick a symbol to see where it's defined, what it calls,
+            who calls it, and what changing it would affect.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel no-zen" id="insights-panel" style="display:none">
+      <h2>Insights</h2>
+      <div class="ins" id="insights"></div>
+    </div>
+
     <div class="viewer" id="viewer">
       <div class="viewer-bar">
         <span class="name" id="viewer-name"></span>
@@ -326,7 +402,13 @@ PAGE = """<!doctype html>
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
-const esc = (s) => { const d = document.createElement("div"); d.textContent = s == null ? "" : String(s); return d.innerHTML; };
+/* Escapes for BOTH text and attribute contexts. The textContent trick
+   leaves quotes alone, and this is interpolated into attributes like
+   data-id="${esc(...)}" -- a symbol id embeds a file path, and a quote
+   in a filename is legal on Linux and macOS. */
+const esc = (s) => String(s == null ? "" : s)
+  .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+  .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 
 let building = false, migrating = false, currentTree = null;
 
@@ -436,6 +518,11 @@ async function build() {
         </div>
       </div>`;
     showTree(r.tree_filename, r.repo_path);
+    $("inspect").classList.add("show");
+    selectedId = null;
+    $("q").value = "";
+    search("");
+    loadInsights();
     loadState();
   } else {
     status.innerHTML = `<div class="box err"><div class="title">Couldn't build that</div>${esc(r.error || "Unknown error.")}</div>`;
@@ -445,6 +532,268 @@ async function build() {
   building = false;
   $("build").disabled = false;
 }
+
+/* ---------------- inspector ---------------- */
+let symbols = [], selectedId = null, searchTimer = null;
+
+function kindBadge(k) { return '<span class="badge k-' + esc(k) + '">' + esc(k) + "</span>"; }
+
+async function search(q) {
+  let data;
+  try { data = await (await fetch("/api/symbols?q=" + encodeURIComponent(q))).json(); }
+  catch (e) { return; }
+  symbols = data.results || [];
+  const el = $("results");
+  if (!symbols.length) {
+    el.innerHTML = '<li class="empty">No symbol matches that.</li>';
+    return;
+  }
+  el.innerHTML = symbols.map((s) => `
+    <li data-id="${esc(s.id)}" class="${s.id === selectedId ? "sel" : ""}">
+      <div class="n">${esc(s.qualified_name)}${kindBadge(s.kind)}</div>
+      <div class="f">${esc(s.file_path)}:${s.line_start}</div>
+    </li>`).join("");
+  el.querySelectorAll("li[data-id]").forEach((li) => {
+    li.addEventListener("click", () => selectSymbol(li.dataset.id));
+  });
+}
+
+function refList(items, empty) {
+  if (!items.length) return '<li class="mut">' + esc(empty) + "</li>";
+  return items.map((s) =>
+    `<li class="link" data-goto="${esc(s.id)}">${esc(s.qualified_name)}` +
+    `<span class="why">${esc(s.file_path)}</span></li>`).join("");
+}
+
+async function selectSymbol(id) {
+  selectedId = id;
+  document.querySelectorAll("#results li[data-id]").forEach((li) =>
+    li.classList.toggle("sel", li.dataset.id === id));
+
+  let d;
+  try { d = await (await fetch("/api/symbol?id=" + encodeURIComponent(id))).json(); }
+  catch (e) { return; }
+  if (d.error) { $("detail").innerHTML = '<div class="empty">' + esc(d.error) + "</div>"; return; }
+
+  const callsHtml = d.calls.length ? d.calls.map((c) => {
+    if (c.resolved) {
+      return `<li class="link" data-goto="${esc(c.id)}">${esc(c.name)}` +
+             `<span class="why">line ${c.line} &middot; ${esc(c.file_path)}</span></li>`;
+    }
+    const w = c.why || {};
+    return `<li class="mut">${esc(c.name)}` +
+           `<span class="why ${w.reason === "ambiguous" ? "ambiguous" : ""}">` +
+           `line ${c.line} &middot; ${esc(w.reason || "unresolved")} &mdash; ${esc(w.detail || "")}</span></li>`;
+  }).join("") : '<li class="mut">Calls nothing in this repo.</li>';
+
+  $("detail").innerHTML = `
+    <h3>${esc(d.qualified_name)}${kindBadge(d.kind)}</h3>
+    <div class="where">${esc(d.file_path)}:${d.line_start}&ndash;${d.line_end}</div>
+    ${d.docstring ? `<div class="doc">${esc(d.docstring.trim().slice(0, 400))}</div>` : ""}
+    <div class="cols">
+      <div class="col">
+        <div class="impact-head">
+          <span class="impact-n">${d.blast_radius.length}</span>
+          <h4 style="margin:0">Blast radius</h4>
+        </div>
+        <div class="why" style="padding:0 0 6px">Everything that transitively reaches this.</div>
+        <ul>${refList(d.blast_radius, "Nothing depends on this.")}</ul>
+      </div>
+      <div class="col">
+        <h4>Called by (${d.callers.length})</h4>
+        <ul>${refList(d.callers, "No direct callers found.")}</ul>
+      </div>
+      <div class="col">
+        <h4>Calls (${d.calls.length})</h4>
+        <ul>${callsHtml}</ul>
+      </div>
+    </div>
+    <div class="nbhd">
+      <svg id="nbhd-svg" viewBox="0 0 640 300" preserveAspectRatio="xMidYMid meet"></svg>
+      <div class="cap">
+        <span class="lg"><i style="background:#5b8cff"></i>this symbol</span>
+        <span class="lg"><i style="background:#d9a441"></i>callers</span>
+        <span class="lg"><i style="background:#4c9f70"></i>callees</span>
+        &mdash; one hop. Drag to rearrange, double-click to jump.
+      </div>
+    </div>`;
+
+  $("detail").querySelectorAll("li[data-goto]").forEach((li) => {
+    li.addEventListener("click", () => selectSymbol(li.dataset.goto));
+  });
+  drawNeighbourhood(d.neighbourhood, d.id);
+}
+
+/* Force-directed mini-graph: repulsion + springs + centring, settled over a
+   fixed number of ticks so no animation loop is left running. */
+function drawNeighbourhood(nb, centreId) {
+  const svg = $("nbhd-svg");
+  if (!svg || !nb || !nb.nodes.length) return;
+  const W = 640, H = 300, NS = "http://www.w3.org/2000/svg";
+  const COLOR = { centre: "#5b8cff", caller: "#d9a441", callee: "#4c9f70" };
+
+  const nodes = nb.nodes.map((n, i) => {
+    const a = (2 * Math.PI * i) / nb.nodes.length;
+    return Object.assign({}, n, {
+      x: W / 2 + Math.cos(a) * 110, y: H / 2 + Math.sin(a) * 80, vx: 0, vy: 0,
+    });
+  });
+  const byId = {};
+  nodes.forEach((n) => { byId[n.id] = n; });
+  const links = nb.edges.filter((e) => byId[e.source] && byId[e.target]);
+
+  for (let step = 0; step < 260; step++) {
+    for (const a of nodes) {
+      for (const b of nodes) {
+        if (a === b) continue;
+        const dx = a.x - b.x, dy = a.y - b.y;
+        const d2 = dx * dx + dy * dy || 0.01;
+        const d = Math.sqrt(d2);
+        const rep = 5200 / d2;
+        a.vx += (dx / d) * rep; a.vy += (dy / d) * rep;
+      }
+      a.vx += (W / 2 - a.x) * 0.012;
+      a.vy += (H / 2 - a.y) * 0.012;
+    }
+    for (const l of links) {
+      const s = byId[l.source], t = byId[l.target];
+      const dx = t.x - s.x, dy = t.y - s.y;
+      const d = Math.sqrt(dx * dx + dy * dy) || 0.01;
+      const f = (d - 95) * 0.02;
+      s.vx += (dx / d) * f; s.vy += (dy / d) * f;
+      t.vx -= (dx / d) * f; t.vy -= (dy / d) * f;
+    }
+    for (const n of nodes) {
+      n.x += n.vx * 0.55; n.y += n.vy * 0.55;
+      n.vx *= 0.82; n.vy *= 0.82;
+      n.x = Math.max(30, Math.min(W - 30, n.x));
+      n.y = Math.max(20, Math.min(H - 20, n.y));
+    }
+  }
+
+  const el = (name, attrs) => {
+    const e = document.createElementNS(NS, name);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    return e;
+  };
+  svg.innerHTML = "";
+  const defs = el("defs", {});
+  const marker = el("marker", {
+    id: "arw", viewBox: "0 0 10 10", refX: "16", refY: "5",
+    markerWidth: "5", markerHeight: "5", orient: "auto-start-reverse",
+  });
+  marker.appendChild(el("path", { d: "M 0 0 L 10 5 L 0 10 z", fill: "#3a4150" }));
+  defs.appendChild(marker);
+  svg.appendChild(defs);
+
+  const lineEls = [];
+  for (const l of links) {
+    const s = byId[l.source], t = byId[l.target];
+    const ln = el("line", {
+      x1: s.x, y1: s.y, x2: t.x, y2: t.y,
+      stroke: "#3a4150", "stroke-width": "1", "marker-end": "url(#arw)",
+    });
+    lineEls.push(ln);
+    svg.appendChild(ln);
+  }
+
+  function redrawLines() {
+    links.forEach((l, i) => {
+      const s = byId[l.source], t = byId[l.target];
+      lineEls[i].setAttribute("x1", s.x); lineEls[i].setAttribute("y1", s.y);
+      lineEls[i].setAttribute("x2", t.x); lineEls[i].setAttribute("y2", t.y);
+    });
+  }
+
+  for (const n of nodes) {
+    const g = el("g", { transform: "translate(" + n.x + "," + n.y + ")", style: "cursor:grab" });
+    g.appendChild(el("circle", {
+      r: n.id === centreId ? 9 : 6, fill: COLOR[n.role] || "#8a8f98",
+      stroke: "#0f1115", "stroke-width": "2",
+    }));
+    const label = el("text", {
+      y: -13, "text-anchor": "middle", fill: "#e6e8eb",
+      "font-size": "10", "font-family": "ui-monospace, Consolas, monospace",
+    });
+    label.textContent = n.label.length > 22 ? n.label.slice(0, 21) + "…" : n.label;
+    g.appendChild(label);
+    const title = el("title", {});
+    title.textContent = n.full + "  ·  " + n.file_path;
+    g.appendChild(title);
+
+    g.addEventListener("mousedown", (ev) => {
+      ev.preventDefault();
+      const box = svg.getBoundingClientRect();
+      const sx = W / box.width, sy = H / box.height;
+      const move = (m) => {
+        n.x = Math.max(30, Math.min(W - 30, (m.clientX - box.left) * sx));
+        n.y = Math.max(20, Math.min(H - 20, (m.clientY - box.top) * sy));
+        g.setAttribute("transform", "translate(" + n.x + "," + n.y + ")");
+        redrawLines();
+      };
+      const up = () => {
+        window.removeEventListener("mousemove", move);
+        window.removeEventListener("mouseup", up);
+      };
+      window.addEventListener("mousemove", move);
+      window.addEventListener("mouseup", up);
+    });
+    g.addEventListener("dblclick", () => selectSymbol(n.id));
+    svg.appendChild(g);
+  }
+}
+
+/* ---------------- insights ---------------- */
+function listBlock(title, items, render, note) {
+  return `<div class="col"><h4>${esc(title)}</h4>` +
+    (note ? `<div class="why" style="padding:0 0 6px">${esc(note)}</div>` : "") +
+    "<ul>" + (items.length ? items.map(render).join("") : '<li class="mut">None.</li>') + "</ul></div>";
+}
+
+async function loadInsights() {
+  let i;
+  try { i = await (await fetch("/api/insights")).json(); } catch (e) { return; }
+  if (!i || i.error) return;
+  const maxCalled = Math.max(1, ...i.most_called.map((r) => r.count));
+  const maxFile = Math.max(1, ...i.busiest_files.map((r) => r.count));
+
+  $("insights").innerHTML =
+    listBlock("Most referenced", i.most_called, (r) =>
+      `<li class="link" data-goto="${esc(r.id)}"><div class="row2"><span>${esc(r.qualified_name)}</span>` +
+      `<span class="c">${r.count}</span></div>` +
+      `<div class="bar" style="width:${(r.count / maxCalled) * 100}%"></div></li>`,
+      "Change these carefully.") +
+    listBlock("Never referenced", i.never_called, (r) =>
+      `<li class="link" data-goto="${esc(r.id)}">${esc(r.qualified_name)}` +
+      `<span class="why">${esc(r.file_path)}</span></li>`,
+      i.never_called_total + " total — entry points, dead code, or dynamic dispatch.") +
+    listBlock("Longest", i.biggest, (r) =>
+      `<li class="link" data-goto="${esc(r.id)}"><div class="row2"><span>${esc(r.qualified_name)}</span>` +
+      `<span class="c">${r.lines} ln</span></div></li>`,
+      "Candidates for splitting up.") +
+    listBlock("Busiest files", i.busiest_files, (r) =>
+      `<li class="mut"><div class="row2"><span>${esc(r.file_path)}</span>` +
+      `<span class="c">${r.count}</span></div>` +
+      `<div class="bar" style="width:${(r.count / maxFile) * 100}%"></div></li>`) +
+    listBlock("Most external calls", i.top_unresolved, (r) =>
+      `<li class="mut"><div class="row2"><span>${esc(r.name)}</span>` +
+      `<span class="c">${r.count}</span></div></li>`,
+      "Called but not defined here — stdlib or dependencies.");
+
+  $("insights").querySelectorAll("li[data-goto]").forEach((li) => {
+    li.addEventListener("click", () => {
+      selectSymbol(li.dataset.goto);
+      $("inspect").scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  });
+  $("insights-panel").style.display = "";
+}
+
+$("q").addEventListener("input", (e) => {
+  const v = e.target.value;
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => search(v), 130);
+});
 
 $("build").addEventListener("click", build);
 $("path").addEventListener("keydown", (e) => { if (e.key === "Enter") build(); });
@@ -464,6 +813,9 @@ document.addEventListener("keydown", (e) => {
   }
   const typing = /^(INPUT|TEXTAREA)$/.test((e.target.tagName || ""));
   if (e.key === "/" && !typing) { e.preventDefault(); $("path").focus(); $("path").select(); }
+  if (e.key === "s" && !typing && $("inspect").classList.contains("show")) {
+    e.preventDefault(); $("q").focus(); $("q").select();
+  }
 });
 
 /* ---------------- migrate ---------------- */

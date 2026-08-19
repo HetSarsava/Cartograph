@@ -17,6 +17,9 @@ Routes:
     POST /api/build         {"repo_path": ...} -> BuildResult JSON (sync)
     POST /api/migrate       start the migration demo -> {"job_id": ...}
     GET  /api/job/<id>      poll a background job's status and log lines
+    GET  /api/symbols?q=    search the last built graph
+    GET  /api/symbol?id=    one symbol: callers, calls, blast radius
+    GET  /api/insights      repo-level hotspots from the last built graph
     GET  /tree/<filename>   a previously generated tree from ./logs
 
 The page itself lives in `page.py` and background work in `jobs.py`, so this
@@ -35,12 +38,20 @@ import webbrowser
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 from pydantic import BaseModel, Field
 
 from cartograph.config import get_settings
 from cartograph.graph.indexer import index_repo
 from cartograph.graph.tree_export import export_tree_html
+from cartograph.webui.inspect import (
+    cache_graph,
+    compute_insights,
+    get_graph,
+    search_symbols,
+    symbol_detail,
+)
 from cartograph.webui.jobs import JobRunner, run_migration_demo
 from cartograph.webui.page import PAGE
 
@@ -152,6 +163,8 @@ def build_tree(repo_path: str, logs_dir: Path = LOGS_DIR) -> BuildResult:
     except Exception as exc:  # noqa: BLE001
         logger.exception("[webui] tree export failed for %s", candidate)
         return BuildResult(ok=False, repo_path=repo_path, error=f"Export failed: {exc}")
+
+    cache_graph(str(candidate.resolve()), graph)
 
     resolved = sum(1 for edge in graph.edges if edge.target_id is not None)
     return BuildResult(
@@ -275,6 +288,36 @@ class _Handler(BaseHTTPRequestHandler):
                     self._send(404, b"Not found", "text/plain")
                     return
                 self._send(200, target.read_bytes(), "text/html; charset=utf-8")
+                return
+            if self.path.startswith("/api/symbols"):
+                query = parse_qs(urlparse(self.path).query)
+                graph = get_graph()
+                if graph is None:
+                    self._send_dict(409, {"error": "Build a map first."})
+                    return
+                self._send_dict(
+                    200,
+                    {"results": search_symbols(graph, (query.get("q") or [""])[0])},
+                )
+                return
+            if self.path.startswith("/api/symbol?"):
+                query = parse_qs(urlparse(self.path).query)
+                graph = get_graph()
+                if graph is None:
+                    self._send_dict(409, {"error": "Build a map first."})
+                    return
+                detail = symbol_detail(graph, (query.get("id") or [""])[0])
+                if detail is None:
+                    self._send_dict(404, {"error": "No such symbol."})
+                    return
+                self._send_dict(200, detail)
+                return
+            if self.path == "/api/insights":
+                graph = get_graph()
+                if graph is None:
+                    self._send_dict(409, {"error": "Build a map first."})
+                    return
+                self._send_dict(200, compute_insights(graph))
                 return
             if self.path.startswith("/api/job/"):
                 job_id = self.path[len("/api/job/") :].split("?", 1)[0]

@@ -389,8 +389,22 @@ def _resolve_call_target(
       2. Otherwise, treat the last dotted component as a bare name and look
          it up in `by_bare_name`. Resolve only if exactly one symbol matches;
          ambiguous or unknown names are left unresolved.
+      3. A *dotted* call on an unknown receiver (`x.foo()`) may only resolve
+         to a top-level symbol, never to a method. Nothing here infers the
+         type of `x`, so binding `d.get(...)` to some class's `get` method is
+         a guess -- and it is wrong far more often than right: on this repo it
+         attached 71 dict lookups to a single unrelated method, which then
+         dominated `blast_radius`. A missing edge is a documented limitation;
+         a fabricated one silently corrupts the question the graph exists to
+         answer, so this refuses rather than guesses.
+
+         (A denylist of builtin method names -- get/items/append/... -- would
+         recover a handful of genuine `obj.method()` edges this drops. It was
+         considered and rejected: an open-ended list of special cases to
+         maintain, in exchange for edges that are still guesses.)
     """
     bare_name = call.target_expr.split(".")[-1]
+    is_dotted = "." in call.target_expr
 
     if call.target_expr.startswith("self.") and call.self_class_id is not None:
         for symbol_id, symbol in symbols.items():
@@ -407,6 +421,8 @@ def _resolve_call_target(
 
     candidates = by_bare_name.get(bare_name, [])
     target_id = candidates[0] if len(candidates) == 1 else None
+    if target_id is not None and is_dotted and symbols[target_id].parent_id is not None:
+        target_id = None
     return Edge(
         source_id=call.source_id,
         target_id=target_id,

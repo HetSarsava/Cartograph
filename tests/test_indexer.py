@@ -211,3 +211,72 @@ def test_files_total_is_consistent_across_all_events_when_a_file_is_skipped(tmp_
 
     finished = next(e for e in events if e.kind is IndexEventKind.INDEX_FINISHED)
     assert (finished.files_done, finished.files_total) == (2, 2)
+
+
+def test_dotted_call_does_not_bind_to_an_unrelated_method(tmp_path):
+    """`d.get(...)` must not resolve to some class's `get` method.
+
+    Nothing here infers the type of `d`, so binding them is a guess. It used
+    to happen whenever exactly one symbol had a matching bare name, which on
+    a real repo attached 71 dict lookups to a single method and made it the
+    top result in "most referenced" -- and put it in everything's blast
+    radius. An unresolved edge is honest; a fabricated one is not.
+    """
+    (tmp_path / "m.py").write_text(
+        "class Cache:\n"
+        "    def get(self, key):\n"
+        "        return key\n"
+        "\n"
+        "def lookup(mapping):\n"
+        "    return mapping.get('k')\n"
+    )
+
+    graph = index_repo(tmp_path)
+
+    lookup_edges = [e for e in graph.edges if e.source_id.endswith("::lookup")]
+    assert len(lookup_edges) == 1
+    assert lookup_edges[0].target_name == "mapping.get"
+    assert lookup_edges[0].target_id is None, "must stay unresolved rather than guess"
+
+
+def test_dotted_call_still_resolves_to_a_module_level_function(tmp_path):
+    """The tightened rule must not throw away `module.function()` edges,
+    which are legitimate and common."""
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "helpers.py").write_text("def transform(value):\n    return value\n")
+    (pkg / "main.py").write_text("import helpers\n\ndef run(v):\n    return helpers.transform(v)\n")
+
+    graph = index_repo(tmp_path)
+
+    edge = next(e for e in graph.edges if e.target_name == "helpers.transform")
+    assert edge.target_id is not None
+    assert graph.symbols[edge.target_id].qualified_name == "transform"
+
+
+def test_self_method_call_still_resolves(tmp_path):
+    """`self.x()` is unambiguous by construction and must keep resolving."""
+    (tmp_path / "m.py").write_text(
+        "class Thing:\n"
+        "    def helper(self):\n"
+        "        return 1\n"
+        "\n"
+        "    def run(self):\n"
+        "        return self.helper()\n"
+    )
+
+    graph = index_repo(tmp_path)
+
+    edge = next(e for e in graph.edges if e.target_name == "self.helper")
+    assert graph.symbols[edge.target_id].qualified_name == "Thing.helper"
+
+
+def test_plain_call_to_a_unique_function_still_resolves(tmp_path):
+    (tmp_path / "m.py").write_text(
+        "def helper():\n    return 1\n\ndef run():\n    return helper()\n"
+    )
+
+    graph = index_repo(tmp_path)
+
+    edge = next(e for e in graph.edges if e.target_name == "helper")
+    assert graph.symbols[edge.target_id].qualified_name == "helper"

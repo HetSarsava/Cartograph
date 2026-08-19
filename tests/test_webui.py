@@ -310,10 +310,11 @@ def test_bundled_fixture_is_still_pre_migration():
 
 def test_page_references_only_elements_it_defines():
     """A typo in a getElementById would break the UI silently at runtime."""
-    html = PAGE.split("<script>")[0]
     js = re.search(r"<script>(.*?)</script>", PAGE, re.S).group(1)
 
-    defined = set(re.findall(r'id="([^"]+)"', html))
+    # An id can be declared in the static markup or in a JS template that
+    # renders markup (the neighbourhood <svg>, for instance), so scan both.
+    defined = set(re.findall(r'id="([^"]+)"', PAGE))
     used = set(re.findall(r'\$\("([^"]+)"\)', js))
 
     assert used - defined == set(), f"JS references missing ids: {sorted(used - defined)}"

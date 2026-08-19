@@ -35,9 +35,16 @@ review prep, or working out what a dependency actually does.
 
 **2. Answer "what breaks if I change this?"**
 The symbol graph backs `find_definition`, `find_callers`, and
-`blast_radius` (a BFS over the reverse call graph). These are exposed over
-MCP, so any MCP client — Claude Code included — can call them instead of
+`blast_radius` (a BFS over the reverse call graph). Search for a symbol in
+the web UI's Inspect tab and it shows the answer directly, or call the same
+queries over MCP from any client — Claude Code included — instead of
 grepping and guessing.
+
+Call resolution is deliberately conservative. `x.foo()` on a receiver of
+unknown type is left *unresolved* rather than bound to whichever `foo`
+happens to be unique, because a fabricated edge quietly corrupts the blast
+radius, while a missing one is visible and documented. The UI shows the
+unresolved count and explains each one.
 
 **3. Run a mechanical migration you can actually trust.**
 `cartograph run <repo> "<task>"` migrates a codebase with an LLM in the
@@ -120,6 +127,7 @@ cartograph/
 │       │   └── graph.py             # builds and compiles the StateGraph
 │       ├── webui/                  # stdlib-only local UI (`cartograph serve`)
 │       │   ├── server.py            # routes and request handling
+│       │   ├── inspect.py           # symbol search, blast radius, insights
 │       │   ├── page.py              # the single HTML page
 │       │   └── jobs.py              # background runs with a pollable live log
 │       └── cli.py                   # demo / run / index / tree / serve / models
@@ -218,8 +226,20 @@ running. `--visualize` is the live counterpart — it streams events to
 - **Explore** — type a path or click an example, and the dependency map
   renders *inline* (full-screen toggle, or pop it into its own tab). Every
   map you build stays listed under "Previously built" so you can flip
-  between them. Press <kbd>/</kbd> to jump to the path box, <kbd>Enter</kbd>
-  to build, <kbd>Esc</kbd> to close the viewer.
+  between them.
+- **Inspect** — search the indexed repo (fuzzy: `fcl` finds `find_callers`),
+  then click a symbol for where it's defined, what it calls, who calls it,
+  its **blast radius**, and a one-hop call graph you can drag around and
+  double-click to walk. Unresolved calls say *why*: `ambiguous` (two symbols
+  share the name, so the indexer refused to guess — it names both),
+  `unknown receiver`, or `external`.
+- **Insights** — computed from the graph with no model call: most
+  referenced symbols, never-referenced ones, longest definitions, busiest
+  files, and the most-called external names. Every entry is clickable
+  through to the inspector.
+
+Keyboard: <kbd>/</kbd> jumps to the path box, <kbd>s</kbd> to symbol search,
+<kbd>Enter</kbd> builds, <kbd>Esc</kbd> closes the viewer.
 - **Migrate** — runs the sample migration end to end with the pipeline's own
   log streaming live, then shows the unified diff, a committed/quarantined
   verdict, and the agent's report. It works on a throwaway copy, so it never
