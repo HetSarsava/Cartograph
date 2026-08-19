@@ -327,3 +327,17 @@ def test_page_is_self_contained():
     assert "href=\"http" not in PAGE.split("<script>")[0].replace(
         'href="https://console.groq.com/keys"', ""
     )
+
+
+def test_neighbourhood_arrowheads_are_sized_independently_of_stroke_width():
+    """SVG markerUnits defaults to strokeWidth, which on a 1px line renders
+    an arrowhead a few pixels across in the same colour as the line — there,
+    but invisible, so the graph reads as undirected."""
+    js = re.search(r"<script>(.*?)</script>", PAGE, re.S).group(1)
+
+    assert 'markerUnits: "userSpaceOnUse"' in js
+    # One marker serves both ends: at the start it flips, which is what a
+    # mutual call needs.
+    assert 'orient: "auto-start-reverse"' in js
+    assert 'marker-start' in js
+

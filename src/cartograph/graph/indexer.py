@@ -385,7 +385,11 @@ def _resolve_call_target(
 
     Resolution order:
       1. `self.<name>` inside a class: look for a method named `<name>` whose
-         `parent_id` is the enclosing class. Unambiguous by construction.
+         `parent_id` is the enclosing class. Unambiguous by construction --
+         but only for a *single* attribute hop. `self.<attr>.<name>()` is a
+         call on whatever `self.<attr>` holds, whose type is unknown, so it
+         does not qualify: `self._jobs.get(k)` is a dict lookup, not the
+         enclosing class's own `get` method.
       2. Otherwise, treat the last dotted component as a bare name and look
          it up in `by_bare_name`. Resolve only if exactly one symbol matches;
          ambiguous or unknown names are left unresolved.
@@ -406,7 +410,12 @@ def _resolve_call_target(
     bare_name = call.target_expr.split(".")[-1]
     is_dotted = "." in call.target_expr
 
-    if call.target_expr.startswith("self.") and call.self_class_id is not None:
+    is_own_method_call = (
+        call.target_expr.startswith("self.")
+        and call.target_expr.count(".") == 1
+        and call.self_class_id is not None
+    )
+    if is_own_method_call:
         for symbol_id, symbol in symbols.items():
             if symbol.parent_id == call.self_class_id and symbol.qualified_name.endswith(
                 f".{bare_name}"

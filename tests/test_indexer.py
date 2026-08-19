@@ -280,3 +280,55 @@ def test_plain_call_to_a_unique_function_still_resolves(tmp_path):
 
     edge = next(e for e in graph.edges if e.target_name == "helper")
     assert graph.symbols[edge.target_id].qualified_name == "helper"
+
+
+def test_call_through_a_self_attribute_is_not_a_call_on_self(tmp_path):
+    """`self._jobs.get(k)` is a dict lookup, not the class's own `get`.
+
+    The self-rule matched any target starting with "self.", so a call on an
+    *attribute* of self was bound to a same-named method of the enclosing
+    class. That fabricated self-recursion: the graph claimed `JobRunner.get`
+    called itself, which then drew as a real-looking bidirectional edge in
+    the neighbourhood view.
+    """
+    (tmp_path / "m.py").write_text(
+        "class Runner:\n"
+        "    def __init__(self):\n"
+        "        self._jobs = {}\n"
+        "\n"
+        "    def get(self, key):\n"
+        "        return self._jobs.get(key)\n"
+    )
+
+    graph = index_repo(tmp_path)
+
+    lookup = next(e for e in graph.edges if e.target_name == "self._jobs.get")
+    assert lookup.target_id is None, "must not resolve to Runner.get"
+
+
+def test_a_plain_self_method_call_still_resolves(tmp_path):
+    """Narrowing the rule must not break the case it exists for."""
+    (tmp_path / "m.py").write_text(
+        "class Runner:\n"
+        "    def helper(self):\n"
+        "        return 1\n"
+        "\n"
+        "    def run(self):\n"
+        "        return self.helper()\n"
+    )
+
+    graph = index_repo(tmp_path)
+
+    edge = next(e for e in graph.edges if e.target_name == "self.helper")
+    assert graph.symbols[edge.target_id].qualified_name == "Runner.helper"
+
+
+def test_genuine_self_recursion_is_still_recorded(tmp_path):
+    """A function that really does call itself keeps that edge — the graph
+    view draws it as a loop, and it is true."""
+    (tmp_path / "m.py").write_text("def walk(node):\n    return walk(node)\n")
+
+    graph = index_repo(tmp_path)
+
+    edge = next(e for e in graph.edges if e.target_name == "walk")
+    assert edge.source_id == edge.target_id

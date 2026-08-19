@@ -614,7 +614,8 @@ async function selectSymbol(id) {
         <span class="lg"><i style="background:#5b8cff"></i>this symbol</span>
         <span class="lg"><i style="background:#d9a441"></i>callers</span>
         <span class="lg"><i style="background:#4c9f70"></i>callees</span>
-        &mdash; one hop. Drag to rearrange, double-click to jump.
+        &mdash; arrows point caller &rarr; callee, both ends when they call each other.
+        Drag to rearrange, double-click to jump.
       </div>
     </div>`;
 
@@ -678,30 +679,60 @@ function drawNeighbourhood(nb, centreId) {
   };
   svg.innerHTML = "";
   const defs = el("defs", {});
+  /* markerUnits defaults to strokeWidth, which on a 1px line renders an
+     arrowhead about 5px across in the same grey as the line -- present, but
+     invisible in practice. Pin it to userSpaceOnUse and give it its own
+     lighter fill so direction actually reads.
+     orient="auto-start-reverse" lets the one marker serve both ends: at the
+     start it flips, which is what a mutual call needs. */
   const marker = el("marker", {
-    id: "arw", viewBox: "0 0 10 10", refX: "16", refY: "5",
-    markerWidth: "5", markerHeight: "5", orient: "auto-start-reverse",
+    id: "arw", viewBox: "0 0 10 10", refX: "10", refY: "5",
+    markerWidth: "9", markerHeight: "9", markerUnits: "userSpaceOnUse",
+    orient: "auto-start-reverse",
   });
-  marker.appendChild(el("path", { d: "M 0 0 L 10 5 L 0 10 z", fill: "#3a4150" }));
+  marker.appendChild(el("path", { d: "M 0 0 L 10 5 L 0 10 z", fill: "#6b7a90" }));
   defs.appendChild(marker);
   svg.appendChild(defs);
 
   const lineEls = [];
-  for (const l of links) {
+  function endpoints(l) {
+    /* Stop the line short of both circles so the arrowhead sits beside the
+       node rather than buried under it. */
     const s = byId[l.source], t = byId[l.target];
+    const dx = t.x - s.x, dy = t.y - s.y;
+    const len = Math.sqrt(dx * dx + dy * dy) || 1;
+    const ux = dx / len, uy = dy / len;
+    const rs = (s.id === centreId ? 11 : 8) + (l.both ? 9 : 0);
+    const rt = (t.id === centreId ? 11 : 8) + 9;
+    return {
+      x1: s.x + ux * rs, y1: s.y + uy * rs,
+      x2: t.x - ux * rt, y2: t.y - uy * rt,
+    };
+  }
+
+  for (const l of links) {
+    const p = endpoints(l);
     const ln = el("line", {
-      x1: s.x, y1: s.y, x2: t.x, y2: t.y,
-      stroke: "#3a4150", "stroke-width": "1", "marker-end": "url(#arw)",
+      x1: p.x1, y1: p.y1, x2: p.x2, y2: p.y2,
+      stroke: l.both ? "#6b7a90" : "#3f4857",
+      "stroke-width": l.both ? "1.6" : "1.2",
+      "marker-end": "url(#arw)",
     });
+    if (l.both) ln.setAttribute("marker-start", "url(#arw)");
+    const lt = el("title", {});
+    lt.textContent = l.both
+      ? byId[l.source].full + "  <->  " + byId[l.target].full + "   (call each other)"
+      : byId[l.source].full + "  calls  " + byId[l.target].full;
+    ln.appendChild(lt);
     lineEls.push(ln);
     svg.appendChild(ln);
   }
 
   function redrawLines() {
-    links.forEach((l, i) => {
-      const s = byId[l.source], t = byId[l.target];
-      lineEls[i].setAttribute("x1", s.x); lineEls[i].setAttribute("y1", s.y);
-      lineEls[i].setAttribute("x2", t.x); lineEls[i].setAttribute("y2", t.y);
+    links.forEach(function (l, i) {
+      const p = endpoints(l);
+      lineEls[i].setAttribute("x1", p.x1); lineEls[i].setAttribute("y1", p.y1);
+      lineEls[i].setAttribute("x2", p.x2); lineEls[i].setAttribute("y2", p.y2);
     });
   }
 

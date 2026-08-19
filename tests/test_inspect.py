@@ -294,3 +294,45 @@ def test_cache_evicts_the_oldest_graph():
 
 def test_get_graph_is_none_before_anything_is_built():
     assert get_graph() is None
+
+
+def test_neighbourhood_marks_a_mutual_pair_as_bidirectional():
+    """A calls B and B calls A is one link with `both`, not two stacked
+    lines — the renderer puts an arrowhead on each end."""
+    a = _sym("a.py::a", "a")
+    b = _sym("a.py::b", "b")
+    graph = _graph([a, b], [_edge(a.id, b.id), _edge(b.id, a.id)])
+
+    edges = neighbourhood(graph, a.id)["edges"]
+
+    assert len(edges) == 1
+    assert edges[0]["both"] is True
+
+
+def test_neighbourhood_keeps_one_way_calls_directional():
+    """Direction is the point: source is the caller, target the callee."""
+    caller = _sym("a.py::caller", "caller")
+    callee = _sym("a.py::callee", "callee")
+    graph = _graph([caller, callee], [_edge(caller.id, callee.id)])
+
+    edges = neighbourhood(graph, caller.id)["edges"]
+
+    assert len(edges) == 1
+    assert edges[0]["source"] == caller.id
+    assert edges[0]["target"] == callee.id
+    assert edges[0]["both"] is False
+
+
+def test_repeated_calls_in_both_directions_still_collapse_to_one_link():
+    a = _sym("a.py::a", "a")
+    b = _sym("a.py::b", "b")
+    graph = _graph(
+        [a, b],
+        [_edge(a.id, b.id, line=1), _edge(a.id, b.id, line=2), _edge(b.id, a.id, line=3)],
+    )
+
+    edges = neighbourhood(graph, a.id)["edges"]
+
+    assert len(edges) == 1
+    assert edges[0]["both"] is True
+

@@ -267,14 +267,21 @@ def neighbourhood(graph: SymbolGraph, symbol_id: str) -> dict[str, Any]:
         for e in graph.edges
         if e.source_id in ids and e.target_id in ids
     ]
-    # Collapse duplicate call sites: two calls to the same target draw one line.
+    # Collapse duplicate call sites: two calls to the same target draw one
+    # line. A mutual pair (A calls B *and* B calls A) collapses to a single
+    # link flagged `both`, so the renderer can put an arrowhead on each end
+    # instead of stacking two identical lines on top of each other.
+    directed = {(link["source"], link["target"]) for link in edges}
     seen: set[tuple[str, str]] = set()
     unique_edges: list[dict[str, Any]] = []
     for link in edges:
-        pair = (link["source"], link["target"])
-        if pair not in seen:
-            seen.add(pair)
-            unique_edges.append(link)
+        source, target = link["source"], link["target"]
+        if (source, target) in seen or (target, source) in seen:
+            continue
+        seen.add((source, target))
+        unique_edges.append(
+            {"source": source, "target": target, "both": (target, source) in directed}
+        )
 
     return {"nodes": nodes, "edges": unique_edges}
 
