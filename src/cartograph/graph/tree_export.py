@@ -851,8 +851,11 @@ function fitDiagram() {
 function setView(mode) {
   viewMode = mode;
   var listOn = mode === "list";
-  document.getElementById("tree").style.display = listOn ? "" : "none";
-  document.getElementById("diagram-wrap").style.display = listOn ? "none" : "";
+  /* Set a concrete value, never "". Clearing the inline style would let the
+     stylesheet's `#diagram-wrap { display: none }` win and the canvas would
+     stay blank -- which is exactly what happened the first time. */
+  document.getElementById("tree").style.display = listOn ? "block" : "none";
+  document.getElementById("diagram-wrap").style.display = listOn ? "none" : "block";
   document.getElementById("view-list").classList.toggle("on", listOn);
   document.getElementById("view-diagram").classList.toggle("on", !listOn);
   if (!listOn) {

@@ -191,3 +191,31 @@ def test_diagram_refuses_to_draw_an_unreadable_number_of_nodes(tmp_path):
     assert "MAX_DRAWN" in html
     assert "too many to draw" in html
 
+
+def test_view_toggle_sets_an_explicit_display_value(tmp_path):
+    """An element the stylesheet hides with `display: none` cannot be shown
+    by clearing its inline style -- the rule just wins again.
+
+    The diagram container shipped exactly that bug: `style.display = ""`
+    left the canvas blank while every JS-level test passed, because a DOM
+    stub models `style` as a plain object and knows nothing about the
+    cascade. So assert it at the source instead.
+    """
+    import re
+
+    from cartograph.graph.tree_export import _HTML_TEMPLATE
+
+    css = _HTML_TEMPLATE.split("<style>")[1].split("</style>")[0]
+    js = re.search(r"<script>(.*?)</script>", _HTML_TEMPLATE, re.S).group(1)
+
+    hidden_by_css = set(re.findall(r"#([A-Za-z0-9_-]+)\s*\{[^}]*display:\s*none", css))
+    assert "diagram-wrap" in hidden_by_css, "expected the diagram to start hidden"
+
+    for element_id in hidden_by_css:
+        for assignment in re.findall(
+            r'getElementById\("%s"\)\.style\.display\s*=\s*([^;]+);' % element_id, js
+        ):
+            assert '""' not in assignment and "''" not in assignment, (
+                f"#{element_id} is hidden by CSS, so {assignment.strip()} leaves it hidden"
+            )
+
