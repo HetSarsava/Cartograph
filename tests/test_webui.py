@@ -341,3 +341,61 @@ def test_neighbourhood_arrowheads_are_sized_independently_of_stroke_width():
     assert 'orient: "auto-start-reverse"' in js
     assert 'marker-start' in js
 
+
+def test_page_defines_every_function_it_calls():
+    """A helper deleted by an edit is a runtime ReferenceError, and nothing
+    else here would catch it: `node --check` only parses, and the id audit
+    only reads markup. This is how `search()` briefly went missing while the
+    inspector panel was being reworked -- the page loaded, the search box
+    just silently did nothing.
+    """
+    js = re.search(r"<script>(.*?)</script>", PAGE, re.S).group(1)
+
+    # Blank out string and template literals first: "translate(" and "url("
+    # are CSS fragments, not calls.
+    stripped = re.sub(r"\"[^\"\n]*\"|'[^'\n]*'|`(?:[^`\\]|\\.)*`", '""', js, flags=re.S)
+
+    defined = set(re.findall(r"(?:async\s+)?function\s+([A-Za-z_$][\w$]*)", js))
+    defined |= set(re.findall(r"(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=", js))
+
+    # Bare calls only -- `x.foo(` is a method on something we can't check here.
+    called = set(re.findall(r"(?<![.\w$])([a-z_$][\w$]*)\s*\(", stripped))
+    builtins = {
+        "if", "for", "while", "switch", "catch", "function", "return", "typeof",
+        "fetch", "setTimeout", "clearTimeout", "parseInt", "parseFloat",
+        "encodeURIComponent", "decodeURIComponent", "await", "new", "else",
+        "do", "try", "isNaN", "require",
+    }
+
+    missing = sorted(called - defined - builtins)
+    assert not missing, f"page calls undefined function(s): {missing}"
+
+
+def test_inspector_columns_have_no_nested_scroll_regions():
+    """The detail panel sits inside a scrolling page inside a viewer. Giving
+    its columns their own overflow made three levels of scrollbar, which is
+    miserable to navigate -- long lists cap with a "show more" instead.
+    """
+    css = PAGE.split("<style>")[1].split("</style>")[0]
+
+    scrolling = re.findall(r"(\.[\w.\s>-]+)\{[^}]*overflow-y:\s*auto[^}]*\}", css)
+    scrolling = [s.strip() for s in scrolling]
+
+    # Two intended scroll regions: the results list, and the live migration
+    # log (which tails output and has to scroll).
+    assert sorted(scrolling) == [".log", ".results"], (
+        f"unexpected scroll regions: {scrolling}"
+    )
+    assert "LIST_CAP" in PAGE
+
+
+def test_inspector_truncates_rather_than_breaking_words_mid_name():
+    """`word-break: break-all` split `JobRunner.get` across lines as
+    "JobR / unner.get". Names ellipsize on one line and carry a tooltip."""
+    css = PAGE.split("<style>")[1].split("</style>")[0]
+
+    inspector = re.findall(r"\.(?:col|results)[^{}]*\{[^}]*\}", css)
+    for rule in inspector:
+        assert "break-all" not in rule, f"mid-word breaking in: {rule[:60]}"
+
+    assert "text-overflow: ellipsis" in css

@@ -132,48 +132,100 @@ PAGE = """<!doctype html>
   /* --- inspector --- */
   #inspect { display: none; }
   #inspect.show { display: block; }
-  .split { display: grid; grid-template-columns: 300px 1fr; gap: 16px; align-items: start; }
-  @media (max-width: 820px) { .split { grid-template-columns: 1fr; } }
-  .results { max-height: 460px; overflow-y: auto; margin: 0; padding: 0; list-style: none; }
+  .split { display: grid; grid-template-columns: minmax(230px, 260px) minmax(0, 1fr); gap: 20px; align-items: start; }
+  @media (max-width: 900px) { .split { grid-template-columns: minmax(0, 1fr); } }
+
+  /* Results: one scroll region, and only vertical. Long names truncate with
+     an ellipsis rather than forcing the panel to scroll sideways. */
+  .results { max-height: 520px; overflow-y: auto; overflow-x: hidden; margin: 0; padding: 0 4px 0 0; list-style: none; }
   .results li {
     padding: 7px 9px; border-radius: 5px; cursor: pointer; border: 1px solid transparent;
+    min-width: 0;
   }
   .results li:hover { background: #10141b; }
   .results li.sel { background: #131a29; border-color: var(--accent-dim); }
-  .results .n { font-family: var(--mono); font-size: 12.5px; }
-  .results .f { color: var(--muted); font-size: 11px; font-family: var(--mono); word-break: break-all; }
+  .results .n {
+    font-family: var(--mono); font-size: 12.5px; display: flex; align-items: center; gap: 6px;
+  }
+  .results .n span.t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .results .f {
+    color: var(--muted); font-size: 11px; font-family: var(--mono);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
   .badge {
-    font-size: 10px; text-transform: uppercase; letter-spacing: .05em; padding: 1px 6px;
-    border-radius: 3px; border: 1px solid var(--border); color: var(--muted); margin-left: 6px;
+    font-size: 9.5px; text-transform: uppercase; letter-spacing: .05em; padding: 1px 5px;
+    border-radius: 3px; border: 1px solid var(--border); color: var(--muted);
+    flex: 0 0 auto; line-height: 1.5;
   }
   .badge.k-class { color: #e0a030; border-color: #5a4520; }
   .badge.k-function { color: #4c9f70; border-color: #2f5d45; }
   .badge.k-method { color: #7ba3ff; border-color: #2d4a8a; }
-  .detail h3 { margin: 0 0 2px; font-size: 15px; font-family: var(--mono); }
-  .detail .where { color: var(--muted); font-family: var(--mono); font-size: 12px; margin-bottom: 10px; }
+
+  /* Detail */
+  .detail { min-width: 0; }
+  .detail h3 {
+    margin: 0 0 3px; font-size: 15px; font-family: var(--mono);
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  }
+  .detail .where { color: var(--muted); font-family: var(--mono); font-size: 12px; }
   .detail .doc {
     color: var(--muted); font-size: 12.5px; border-left: 2px solid var(--border);
-    padding-left: 10px; margin: 10px 0; white-space: pre-wrap;
+    padding-left: 11px; margin: 11px 0 0; white-space: pre-wrap;
   }
-  .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; margin-top: 14px; }
+
+  /* Relationship columns: three equal tracks, no inner scrollbars. Long
+     lists cap themselves and offer the rest on demand, because a scroll
+     region inside a scroll region inside the page is miserable to use. */
+  .cols {
+    display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 18px; margin-top: 18px;
+  }
+  @media (max-width: 860px) { .cols { grid-template-columns: minmax(0, 1fr); } }
+  .col { min-width: 0; }
   .col h4 {
-    margin: 0 0 7px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+    margin: 0; font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
     color: var(--muted); font-weight: 600;
   }
-  .col ul { list-style: none; margin: 0; padding: 0; max-height: 190px; overflow-y: auto; }
-  .col li { font-family: var(--mono); font-size: 11.5px; padding: 3px 0; word-break: break-all; }
-  .col li.link { cursor: pointer; color: var(--accent); }
-  .col li.link:hover { text-decoration: underline; }
-  .col li.mut { color: var(--muted); }
-  .why { color: var(--muted); font-size: 10.5px; font-family: inherit; display: block; padding-left: 10px; }
-  .why.ambiguous { color: var(--warn); }
-  .impact-head { display: flex; align-items: baseline; gap: 8px; }
-  .impact-n {
-    font-family: var(--mono); font-size: 18px; font-weight: 650; color: var(--warn);
+  .col-head { display: flex; align-items: baseline; gap: 7px; margin-bottom: 3px; }
+  .col-head .n { font-family: var(--mono); font-size: 15px; font-weight: 650; color: var(--text); }
+  .col-note { color: var(--muted); font-size: 11px; margin: 0 0 8px; }
+  .col ul { list-style: none; margin: 0; padding: 0; }
+  .col li {
+    font-family: var(--mono); font-size: 11.5px; padding: 4px 0;
+    border-bottom: 1px solid var(--panel2); min-width: 0;
   }
-  .nbhd { margin-top: 14px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel2); }
-  .nbhd svg { display: block; width: 100%; height: 300px; }
-  .nbhd .cap { padding: 7px 11px; border-top: 1px solid var(--border); color: var(--muted); font-size: 11.5px; }
+  .col li:last-child { border-bottom: none; }
+  .col li .t {
+    display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .col li.link .t { cursor: pointer; color: var(--accent); }
+  .col li.link:hover .t { text-decoration: underline; }
+  .col li.mut .t { color: var(--muted); }
+  .col li .sub {
+    display: block; color: var(--muted); font-size: 10.5px; font-family: inherit;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px;
+  }
+  .col .empty { color: var(--muted); font-style: italic; font-size: 12px; padding: 4px 0; }
+  .more {
+    background: none; border: none; color: var(--accent); font-size: 11.5px;
+    padding: 6px 0 0; cursor: pointer; font-family: inherit;
+  }
+  .more:hover { text-decoration: underline; }
+
+  /* Reason chips: the full sentence lives in the tooltip, so a narrow
+     column shows the classification instead of wrapped prose. */
+  .rz {
+    display: inline-block; font-size: 9.5px; text-transform: uppercase; letter-spacing: .05em;
+    padding: 0 5px; border-radius: 3px; border: 1px solid var(--border);
+    color: var(--muted); margin-left: 6px; vertical-align: 1px; cursor: help;
+  }
+  .rz.ambiguous { color: var(--warn); border-color: #5d4c2f; }
+  .rz.external { color: var(--muted); }
+  .rz.receiver { color: #9a8fbf; border-color: #40395c; }
+
+  .nbhd { margin-top: 18px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel2); }
+  .nbhd svg { display: block; width: 100%; height: 340px; }
+  .nbhd .cap { padding: 8px 12px; border-top: 1px solid var(--border); color: var(--muted); font-size: 11.5px; }
   .lg { display: inline-flex; align-items: center; gap: 5px; margin-right: 12px; }
   .lg i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
 
@@ -536,6 +588,8 @@ async function build() {
 /* ---------------- inspector ---------------- */
 let symbols = [], selectedId = null, searchTimer = null;
 
+const LIST_CAP = 10;
+
 function kindBadge(k) { return '<span class="badge k-' + esc(k) + '">' + esc(k) + "</span>"; }
 
 async function search(q) {
@@ -549,8 +603,9 @@ async function search(q) {
     return;
   }
   el.innerHTML = symbols.map((s) => `
-    <li data-id="${esc(s.id)}" class="${s.id === selectedId ? "sel" : ""}">
-      <div class="n">${esc(s.qualified_name)}${kindBadge(s.kind)}</div>
+    <li data-id="${esc(s.id)}" class="${s.id === selectedId ? "sel" : ""}"
+        title="${esc(s.qualified_name)}  &#183;  ${esc(s.file_path)}:${s.line_start}">
+      <div class="n"><span class="t">${esc(s.qualified_name)}</span>${kindBadge(s.kind)}</div>
       <div class="f">${esc(s.file_path)}:${s.line_start}</div>
     </li>`).join("");
   el.querySelectorAll("li[data-id]").forEach((li) => {
@@ -558,11 +613,44 @@ async function search(q) {
   });
 }
 
-function refList(items, empty) {
-  if (!items.length) return '<li class="mut">' + esc(empty) + "</li>";
-  return items.map((s) =>
-    `<li class="link" data-goto="${esc(s.id)}">${esc(s.qualified_name)}` +
-    `<span class="why">${esc(s.file_path)}</span></li>`).join("");
+/* A list that caps itself instead of growing an inner scrollbar. */
+function cappedList(items, render, empty) {
+  if (!items.length) return '<div class="empty">' + esc(empty) + "</div>";
+  const head = items.slice(0, LIST_CAP).map(render).join("");
+  const rest = items.slice(LIST_CAP);
+  let html = '<ul class="capped">' + head;
+  if (rest.length) {
+    html += '<span class="hidden-rest" hidden>' + rest.map(render).join("") + "</span>";
+  }
+  html += "</ul>";
+  if (rest.length) html += '<button class="more">Show ' + rest.length + " more</button>";
+  return html;
+}
+
+function refRow(s) {
+  return '<li class="link" data-goto="' + esc(s.id) + '" title="' + esc(s.qualified_name) +
+    "  ·  " + esc(s.file_path) + '">' +
+    '<span class="t">' + esc(s.qualified_name) + "</span>" +
+    '<span class="sub">' + esc(s.file_path) + "</span></li>";
+}
+
+const REASON_LABEL = { ambiguous: "ambiguous", external: "external", "unknown receiver": "receiver" };
+
+function callRow(c) {
+  if (c.resolved) {
+    return '<li class="link" data-goto="' + esc(c.id) + '" title="' + esc(c.name) +
+      "  ·  " + esc(c.file_path) + '">' +
+      '<span class="t">' + esc(c.name) + "</span>" +
+      '<span class="sub">line ' + c.line + " · " + esc(c.file_path) + "</span></li>";
+  }
+  const w = c.why || {};
+  const cls = REASON_LABEL[w.reason] || "external";
+  /* The explanation is long prose; it belongs in a tooltip, not wrapped
+     into a narrow column three words at a time. */
+  return '<li class="mut" title="' + esc(w.detail || "unresolved") + '">' +
+    '<span class="t">' + esc(c.name) +
+    '<span class="rz ' + esc(cls) + '">' + esc(w.reason || "unresolved") + "</span></span>" +
+    '<span class="sub">line ' + c.line + "</span></li>";
 }
 
 async function selectSymbol(id) {
@@ -575,41 +663,15 @@ async function selectSymbol(id) {
   catch (e) { return; }
   if (d.error) { $("detail").innerHTML = '<div class="empty">' + esc(d.error) + "</div>"; return; }
 
-  const callsHtml = d.calls.length ? d.calls.map((c) => {
-    if (c.resolved) {
-      return `<li class="link" data-goto="${esc(c.id)}">${esc(c.name)}` +
-             `<span class="why">line ${c.line} &middot; ${esc(c.file_path)}</span></li>`;
-    }
-    const w = c.why || {};
-    return `<li class="mut">${esc(c.name)}` +
-           `<span class="why ${w.reason === "ambiguous" ? "ambiguous" : ""}">` +
-           `line ${c.line} &middot; ${esc(w.reason || "unresolved")} &mdash; ${esc(w.detail || "")}</span></li>`;
-  }).join("") : '<li class="mut">Calls nothing in this repo.</li>';
+  const resolved = d.calls.filter((c) => c.resolved).length;
 
   $("detail").innerHTML = `
-    <h3>${esc(d.qualified_name)}${kindBadge(d.kind)}</h3>
+    <h3><span>${esc(d.qualified_name)}</span>${kindBadge(d.kind)}</h3>
     <div class="where">${esc(d.file_path)}:${d.line_start}&ndash;${d.line_end}</div>
-    ${d.docstring ? `<div class="doc">${esc(d.docstring.trim().slice(0, 400))}</div>` : ""}
-    <div class="cols">
-      <div class="col">
-        <div class="impact-head">
-          <span class="impact-n">${d.blast_radius.length}</span>
-          <h4 style="margin:0">Blast radius</h4>
-        </div>
-        <div class="why" style="padding:0 0 6px">Everything that transitively reaches this.</div>
-        <ul>${refList(d.blast_radius, "Nothing depends on this.")}</ul>
-      </div>
-      <div class="col">
-        <h4>Called by (${d.callers.length})</h4>
-        <ul>${refList(d.callers, "No direct callers found.")}</ul>
-      </div>
-      <div class="col">
-        <h4>Calls (${d.calls.length})</h4>
-        <ul>${callsHtml}</ul>
-      </div>
-    </div>
+    ${d.docstring ? `<div class="doc">${esc(d.docstring.trim().slice(0, 280))}</div>` : ""}
+
     <div class="nbhd">
-      <svg id="nbhd-svg" viewBox="0 0 640 300" preserveAspectRatio="xMidYMid meet"></svg>
+      <svg id="nbhd-svg" viewBox="0 0 640 340" preserveAspectRatio="xMidYMid meet"></svg>
       <div class="cap">
         <span class="lg"><i style="background:#5b8cff"></i>this symbol</span>
         <span class="lg"><i style="background:#d9a441"></i>callers</span>
@@ -617,11 +679,41 @@ async function selectSymbol(id) {
         &mdash; arrows point caller &rarr; callee, both ends when they call each other.
         Drag to rearrange, double-click to jump.
       </div>
+    </div>
+
+    <div class="cols">
+      <div class="col">
+        <div class="col-head"><span class="n">${d.blast_radius.length}</span><h4>Blast radius</h4></div>
+        <p class="col-note">Everything that transitively reaches this.</p>
+        ${cappedList(d.blast_radius, refRow, "Nothing depends on this.")}
+      </div>
+      <div class="col">
+        <div class="col-head"><span class="n">${d.callers.length}</span><h4>Called by</h4></div>
+        <p class="col-note">Direct callers, one hop.</p>
+        ${cappedList(d.callers, refRow, "No direct callers found.")}
+      </div>
+      <div class="col">
+        <div class="col-head"><span class="n">${d.calls.length}</span><h4>Calls</h4></div>
+        <p class="col-note">${resolved} in this repo, ${d.calls.length - resolved} outside it.</p>
+        ${cappedList(d.calls, callRow, "Calls nothing.")}
+      </div>
     </div>`;
 
   $("detail").querySelectorAll("li[data-goto]").forEach((li) => {
     li.addEventListener("click", () => selectSymbol(li.dataset.goto));
   });
+  $("detail").querySelectorAll("button.more").forEach((b) => {
+    b.addEventListener("click", () => {
+      const hidden = b.previousElementSibling.querySelector(".hidden-rest");
+      if (!hidden) return;
+      hidden.removeAttribute("hidden");
+      hidden.querySelectorAll("li[data-goto]").forEach((li) => {
+        li.addEventListener("click", () => selectSymbol(li.dataset.goto));
+      });
+      b.remove();
+    });
+  });
+
   drawNeighbourhood(d.neighbourhood, d.id);
 }
 
@@ -630,7 +722,7 @@ async function selectSymbol(id) {
 function drawNeighbourhood(nb, centreId) {
   const svg = $("nbhd-svg");
   if (!svg || !nb || !nb.nodes.length) return;
-  const W = 640, H = 300, NS = "http://www.w3.org/2000/svg";
+  const W = 640, H = 340, NS = "http://www.w3.org/2000/svg";
   const COLOR = { centre: "#5b8cff", caller: "#d9a441", callee: "#4c9f70" };
 
   const nodes = nb.nodes.map((n, i) => {
