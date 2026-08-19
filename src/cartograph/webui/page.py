@@ -132,12 +132,26 @@ PAGE = """<!doctype html>
   /* --- inspector --- */
   #inspect { display: none; }
   #inspect.show { display: block; }
-  .split { display: grid; grid-template-columns: minmax(230px, 260px) minmax(0, 1fr); gap: 20px; align-items: start; }
-  @media (max-width: 900px) { .split { grid-template-columns: minmax(0, 1fr); } }
+  /* No align-items:start -- the list should stretch to the detail panel's
+     height instead of stopping short and leaving dead space beside it. */
+  .split { display: grid; grid-template-columns: minmax(230px, 260px) minmax(0, 1fr); gap: 20px; }
+  /* (narrow-screen overrides live with the results rules below) */
 
   /* Results: one scroll region, and only vertical. Long names truncate with
      an ellipsis rather than forcing the panel to scroll sideways. */
-  .results { max-height: 520px; overflow-y: auto; overflow-x: hidden; margin: 0; padding: 0 4px 0 0; list-style: none; }
+  /* The wrapper is the grid item and stretches to the row; the list fills
+     it absolutely, so a long result set scrolls inside the column rather
+     than making the whole row taller than the detail panel. */
+  .results-wrap { position: relative; min-height: 440px; }
+  .results {
+    position: absolute; inset: 0; overflow-y: auto; overflow-x: hidden;
+    margin: 0; padding: 0 6px 0 0; list-style: none;
+  }
+  @media (max-width: 900px) {
+    .split { grid-template-columns: minmax(0, 1fr); }
+    .results-wrap { min-height: 0; }
+    .results { position: static; max-height: 320px; }
+  }
   .results li {
     padding: 7px 9px; border-radius: 5px; cursor: pointer; border: 1px solid transparent;
     min-width: 0;
@@ -376,7 +390,7 @@ PAGE = """<!doctype html>
                placeholder="Search functions, classes, methods&hellip;  (press s)" />
       </div>
       <div class="split">
-        <ul class="results" id="results"></ul>
+        <div class="results-wrap"><ul class="results" id="results"></ul></div>
         <div class="detail" id="detail">
           <div class="empty">Pick a symbol to see where it's defined, what it calls,
             who calls it, and what changing it would affect.</div>
