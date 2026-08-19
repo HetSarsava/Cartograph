@@ -118,8 +118,10 @@ cartograph/
 │       │   ├── state.py             # RunState TypedDict
 │       │   ├── nodes.py             # node functions wrapping agents/tools
 │       │   └── graph.py             # builds and compiles the StateGraph
-│       ├── webui/
-│       │   └── server.py            # stdlib-only local UI (`cartograph serve`)
+│       ├── webui/                  # stdlib-only local UI (`cartograph serve`)
+│       │   ├── server.py            # routes and request handling
+│       │   ├── page.py              # the single HTML page
+│       │   └── jobs.py              # background runs with a pollable live log
 │       └── cli.py                   # demo / run / index / tree / serve / models
 ├── viewer/
 │   └── graph_viewer.html            # live viewer for --visualize event streams
@@ -159,8 +161,8 @@ each agent step.
 - `pipeline/` — a compiled `StateGraph` with the ambiguity and retry-once
   branches wired up, plus a per-step LLM-call budget so an unresolvable
   ambiguity can't loop
-- `webui/server.py` — a stdlib-only local UI for indexing a repo from the
-  browser (`cartograph serve`)
+- `webui/` — a stdlib-only local UI: index a repo from the browser and
+  watch a migration run live (`cartograph serve`)
 
 **Still stubbed:**
 
@@ -209,5 +211,22 @@ running. `--visualize` is the live counterpart — it streams events to
 `./logs/graph-events-*.jsonl` as indexing happens, for
 `viewer/graph_viewer.html` to poll and animate.
 
-`cartograph serve` binds to `127.0.0.1` only. It runs the indexer against
-whatever local path you hand it, so it is not safe to expose on a network.
+### The web UI
+
+`cartograph serve` is the easiest way in — one page, two tabs:
+
+- **Explore** — type a path or click an example, and the dependency map
+  renders *inline* (full-screen toggle, or pop it into its own tab). Every
+  map you build stays listed under "Previously built" so you can flip
+  between them. Press <kbd>/</kbd> to jump to the path box, <kbd>Enter</kbd>
+  to build, <kbd>Esc</kbd> to close the viewer.
+- **Migrate** — runs the sample migration end to end with the pipeline's own
+  log streaming live, then shows the unified diff, a committed/quarantined
+  verdict, and the agent's report. It works on a throwaway copy, so it never
+  touches your files; the header shows whether your API key is set, and the
+  tab explains what to do if it isn't.
+
+It binds to `127.0.0.1` only. It runs the indexer against whatever local
+path you hand it, so it is not safe to expose on a network. It deliberately
+won't rewrite an arbitrary directory — that stays a `cartograph run` decision
+you make in a terminal.

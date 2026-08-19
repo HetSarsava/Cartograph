@@ -13,9 +13,14 @@ loopback host and the filename validation in `safe_tree_path`.
 
 Routes:
     GET  /                  the UI page
-    POST /api/build         {"repo_path": ...} -> BuildResult JSON
-    GET  /api/state         examples + recent trees + cwd, for page load
+    GET  /api/state         examples, recent trees, cwd, whether a key is set
+    POST /api/build         {"repo_path": ...} -> BuildResult JSON (sync)
+    POST /api/migrate       start the migration demo -> {"job_id": ...}
+    GET  /api/job/<id>      poll a background job's status and log lines
     GET  /tree/<filename>   a previously generated tree from ./logs
+
+The page itself lives in `page.py` and background work in `jobs.py`, so this
+module stays about request handling.
 """
 
 from __future__ import annotations
@@ -33,8 +38,11 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from cartograph.config import get_settings
 from cartograph.graph.indexer import index_repo
 from cartograph.graph.tree_export import export_tree_html
+from cartograph.webui.jobs import JobRunner, run_migration_demo
+from cartograph.webui.page import PAGE
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +106,8 @@ class UiState(BaseModel):
     cwd: str
     examples: list[Example]
     recent: list[RecentTree]
+    has_api_key: bool = False
+    """Whether Migrate is usable. Explore never needs a key."""
 
 
 def build_tree(repo_path: str, logs_dir: Path = LOGS_DIR) -> BuildResult:
@@ -219,7 +229,15 @@ def discover_examples(logs_dir: Path = LOGS_DIR) -> UiState:
             for p in files[:10]
         ]
 
-    return UiState(cwd=str(Path.cwd()), examples=examples, recent=recent)
+    return UiState(
+        cwd=str(Path.cwd()),
+        examples=examples,
+        recent=recent,
+        has_api_key=bool(get_settings().groq_api_key),
+    )
+
+
+_jobs = JobRunner()
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -239,10 +257,13 @@ class _Handler(BaseHTTPRequestHandler):
     def _send_json(self, status: int, payload: BaseModel) -> None:
         self._send(status, payload.model_dump_json().encode("utf-8"), "application/json")
 
+    def _send_dict(self, status: int, payload: dict) -> None:
+        self._send(status, json.dumps(payload).encode("utf-8"), "application/json")
+
     def do_GET(self) -> None:  # noqa: N802 - http.server API
         try:
             if self.path == "/" or self.path.startswith("/?"):
-                self._send(200, _PAGE.encode("utf-8"), "text/html; charset=utf-8")
+                self._send(200, PAGE.encode("utf-8"), "text/html; charset=utf-8")
                 return
             if self.path == "/api/state":
                 self._send_json(200, discover_examples())
@@ -255,6 +276,22 @@ class _Handler(BaseHTTPRequestHandler):
                     return
                 self._send(200, target.read_bytes(), "text/html; charset=utf-8")
                 return
+            if self.path.startswith("/api/job/"):
+                job_id = self.path[len("/api/job/") :].split("?", 1)[0]
+                job = _jobs.get(job_id)
+                if job is None:
+                    self._send_dict(404, {"status": "error", "error": "No such job"})
+                    return
+                self._send_dict(
+                    200,
+                    {
+                        "status": job.status,
+                        "lines": job.lines,
+                        "result": job.result,
+                        "error": job.error,
+                    },
+                )
+                return
             if self.path == "/favicon.ico":
                 self._send(204, b"", "image/x-icon")
                 return
@@ -265,6 +302,19 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802 - http.server API
         try:
+            if self.path == "/api/migrate":
+                if not get_settings().groq_api_key:
+                    self._send_dict(400, {"error": "GROQ_API_KEY is not set."})
+                    return
+                if _jobs.busy():
+                    self._send_dict(409, {"error": "A migration is already running."})
+                    return
+                logger.info("[webui] starting migration demo")
+                job_id = _jobs.start(
+                    lambda job, lock: run_migration_demo(job, lock, LOGS_DIR)
+                )
+                self._send_dict(200, {"job_id": job_id})
+                return
             if self.path != "/api/build":
                 self._send(404, b"Not found", "text/plain")
                 return
@@ -364,233 +414,3 @@ def serve(
         pass
     finally:
         httpd.server_close()
-
-
-_PAGE = """<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Cartograph</title>
-<style>
-  :root {
-    --bg: #0f1115; --panel: #171a21; --border: #2a2e37; --text: #e6e8eb;
-    --muted: #8a8f98; --accent: #5b8cff; --ok: #4c9f70; --err: #d06060;
-    --mono: ui-monospace, SFMono-Regular, Consolas, monospace;
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; background: var(--bg); color: var(--text); font-size: 14px;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    line-height: 1.55;
-  }
-  .wrap { max-width: 860px; margin: 0 auto; padding: 32px 20px 64px; }
-  h1 { font-size: 22px; margin: 0 0 4px; }
-  .sub { color: var(--muted); margin: 0 0 28px; }
-  section { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 18px 20px; margin-bottom: 18px; }
-  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 0 0 14px; }
-  ol.steps { margin: 0; padding-left: 20px; }
-  ol.steps li { margin-bottom: 10px; }
-  code, .mono { font-family: var(--mono); font-size: 12.5px; }
-  code { background: #0b0d11; border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; }
-  pre { background: #0b0d11; border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; overflow-x: auto; margin: 8px 0 0; }
-  pre code { background: none; border: none; padding: 0; }
-  .row { display: flex; gap: 10px; flex-wrap: wrap; }
-  input[type=text] {
-    flex: 1 1 340px; min-width: 240px; background: #0b0d11; border: 1px solid var(--border);
-    color: var(--text); padding: 10px 12px; border-radius: 6px; font-family: var(--mono); font-size: 13px;
-  }
-  input[type=text]:focus { outline: none; border-color: var(--accent); }
-  button {
-    background: var(--accent); border: none; color: #fff; padding: 10px 18px;
-    border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500;
-  }
-  button:hover:not(:disabled) { filter: brightness(1.1); }
-  button:disabled { opacity: 0.55; cursor: default; }
-  button.ghost { background: transparent; border: 1px solid var(--border); color: var(--text); font-weight: 400; }
-  button.ghost:hover:not(:disabled) { background: #212630; filter: none; }
-  .examples { display: grid; gap: 10px; }
-  .ex { display: flex; align-items: center; justify-content: space-between; gap: 14px;
-        border: 1px solid var(--border); border-radius: 6px; padding: 12px 14px; }
-  .ex .meta { min-width: 0; }
-  .ex .label { font-weight: 600; }
-  .ex .path { color: var(--muted); font-family: var(--mono); font-size: 12px; }
-  .ex .desc { color: var(--muted); font-size: 12.5px; }
-  .hint { color: var(--muted); font-size: 12.5px; margin-top: 10px; }
-  #status { margin-top: 14px; display: none; }
-  #status.show { display: block; }
-  .card { border: 1px solid var(--border); border-radius: 6px; padding: 14px; background: #0b0d11; }
-  .card.ok { border-color: #2f5d45; }
-  .card.err { border-color: #5d3434; }
-  .stats { display: flex; flex-wrap: wrap; gap: 14px; margin: 10px 0 12px; font-family: var(--mono); font-size: 12.5px; }
-  .stats b { color: var(--text); }
-  .stats span { color: var(--muted); }
-  .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--border);
-          border-top-color: var(--accent); border-radius: 50%; animation: s 0.7s linear infinite; vertical-align: -2px; }
-  @keyframes s { to { transform: rotate(360deg); } }
-  a { color: var(--accent); }
-  ul.recent { list-style: none; margin: 0; padding: 0; }
-  ul.recent li { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--border); }
-  ul.recent li:last-child { border-bottom: none; }
-  ul.recent .when { color: var(--muted); font-size: 12px; white-space: nowrap; }
-  .empty { color: var(--muted); font-style: italic; }
-</style>
-</head>
-<body>
-<div class="wrap">
-  <h1>Cartograph</h1>
-  <p class="sub">Index a Python repo and get a standalone dependency tree you can open and share.</p>
-
-  <section>
-    <h2>How to run</h2>
-    <ol class="steps">
-      <li>Install dependencies once: <code>uv sync</code></li>
-      <li>Start this UI: <code>uv run cartograph serve</code> &mdash; you're looking at it.</li>
-      <li>Enter a repository path below, or click an example. Relative paths resolve against
-          <span class="mono" id="cwd">the launch directory</span>.</li>
-      <li>Press <b>Build tree</b>. Cartograph parses every <code>.py</code> file with tree-sitter,
-          resolves call edges, and writes one self-contained HTML file.</li>
-      <li>Click <b>Open tree</b>. The file is fully standalone &mdash; move it, email it, open it
-          later with no server running.</li>
-    </ol>
-    <div class="hint">Prefer the terminal? These do the same thing:</div>
-    <pre><code>uv run cartograph tree &lt;repo&gt;              # same standalone tree
-uv run cartograph index &lt;repo&gt; --visualize  # live event stream for viewer/graph_viewer.html</code></pre>
-  </section>
-
-  <section>
-    <h2>Build a tree</h2>
-    <div class="row">
-      <input id="path" type="text" placeholder="e.g. src/cartograph  or  C:\\path\\to\\your\\repo" autocomplete="off" />
-      <button id="build">Build tree</button>
-    </div>
-    <div class="hint">A local directory path. Remote git URLs aren't supported yet &mdash; clone first, then point here.</div>
-    <div id="status"></div>
-  </section>
-
-  <section>
-    <h2>Examples</h2>
-    <div class="examples" id="examples"><div class="empty">Loading&hellip;</div></div>
-  </section>
-
-  <section>
-    <h2>Recent trees</h2>
-    <ul class="recent" id="recent"><li class="empty">None yet.</li></ul>
-  </section>
-</div>
-
-<script>
-"use strict";
-const $ = (id) => document.getElementById(id);
-let building = false;
-
-function esc(s) {
-  const d = document.createElement("div");
-  d.textContent = s == null ? "" : String(s);
-  return d.innerHTML;
-}
-
-async function loadState() {
-  let state;
-  try {
-    state = await (await fetch("/api/state")).json();
-  } catch (e) {
-    return;
-  }
-  $("cwd").textContent = state.cwd;
-
-  const ex = $("examples");
-  if (!state.examples.length) {
-    ex.innerHTML = '<div class="empty">No example repos found from this directory.</div>';
-  } else {
-    ex.innerHTML = state.examples.map((e, i) => `
-      <div class="ex">
-        <div class="meta">
-          <div class="label">${esc(e.label)}</div>
-          <div class="path">${esc(e.path)}</div>
-          <div class="desc">${esc(e.description)}</div>
-        </div>
-        <button class="ghost" data-path="${esc(e.path)}">Run this</button>
-      </div>`).join("");
-    ex.querySelectorAll("button[data-path]").forEach((b) => {
-      b.addEventListener("click", () => {
-        $("path").value = b.dataset.path;
-        build();
-      });
-    });
-  }
-  renderRecent(state.recent);
-}
-
-function renderRecent(recent) {
-  const el = $("recent");
-  if (!recent || !recent.length) {
-    el.innerHTML = '<li class="empty">None yet.</li>';
-    return;
-  }
-  el.innerHTML = recent.map((r) => `
-    <li>
-      <a href="/tree/${encodeURIComponent(r.filename)}" target="_blank" rel="noopener">${esc(r.filename)}</a>
-      <span class="when">${esc(r.modified)}</span>
-    </li>`).join("");
-}
-
-async function build() {
-  if (building) return;
-  const repoPath = $("path").value.trim();
-  const status = $("status");
-  if (!repoPath) {
-    status.className = "show";
-    status.innerHTML = '<div class="card err">Enter a repository path first.</div>';
-    return;
-  }
-
-  building = true;
-  $("build").disabled = true;
-  status.className = "show";
-  status.innerHTML = `<div class="card"><span class="spin"></span> Indexing <span class="mono">${esc(repoPath)}</span>&hellip;</div>`;
-
-  let r;
-  try {
-    const res = await fetch("/api/build", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ repo_path: repoPath }),
-    });
-    r = await res.json();
-  } catch (e) {
-    r = { ok: false, error: "Could not reach the server: " + e.message };
-  }
-
-  if (r.ok) {
-    status.innerHTML = `
-      <div class="card ok">
-        <div>Built from <span class="mono">${esc(r.repo_path)}</span> in ${r.duration_seconds}s</div>
-        <div class="stats">
-          <span><b>${r.symbols}</b> symbols</span>
-          <span><b>${r.edges}</b> edges</span>
-          <span>${r.resolved} resolved / ${r.unresolved} unresolved</span>
-          <span><b>${r.files_indexed}</b> files</span>
-          <span>${r.files_skipped} skipped</span>
-        </div>
-        <a href="/tree/${encodeURIComponent(r.tree_filename)}" target="_blank" rel="noopener">
-          <button>Open tree &rarr;</button>
-        </a>
-        <div class="hint">Saved to <span class="mono">${esc(r.tree_path)}</span></div>
-      </div>`;
-    loadState();
-  } else {
-    status.innerHTML = `<div class="card err">${esc(r.error || "Build failed.")}</div>`;
-  }
-
-  building = false;
-  $("build").disabled = false;
-}
-
-$("build").addEventListener("click", build);
-$("path").addEventListener("keydown", (e) => { if (e.key === "Enter") build(); });
-loadState();
-</script>
-</body>
-</html>
-"""

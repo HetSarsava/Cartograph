@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import click
+from langchain_core.runnables import RunnableConfig
 
 from cartograph.config import get_settings
 from cartograph.graph.event_sink import JsonlEventSink
@@ -24,6 +25,7 @@ from cartograph.pipeline.graph import build_graph
 from cartograph.pipeline.state import RunState
 from cartograph.providers.base import ProviderError
 from cartograph.providers.groq_provider import call_stats
+from cartograph.webui.jobs import find_sample_repo
 from cartograph.webui.server import DEFAULT_PORT, PortInUseError, bind, serve
 
 logger = logging.getLogger(__name__)
@@ -81,7 +83,7 @@ def run(repo_path: str, task: str, thread_id: str | None, log_level: str) -> Non
         "task_description": task,
         "thread_id": resolved_thread_id,
     }
-    config = {"configurable": {"thread_id": resolved_thread_id}}
+    config: RunnableConfig = {"configurable": {"thread_id": resolved_thread_id}}
 
     start = time.monotonic()
     try:
@@ -152,9 +154,10 @@ def demo_cmd(ctx: click.Context, keep: bool) -> None:
 
         cartograph demo
     """
-    source = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "sample_repo"
-    if not source.is_dir():
-        raise click.ClickException(f"Bundled sample repo not found at {source}")
+    try:
+        source = find_sample_repo()
+    except RuntimeError as exc:
+        raise click.ClickException(str(exc)) from exc
 
     target = Path("logs") / "demo-repo"
     if target.exists() and not keep:

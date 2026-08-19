@@ -1,0 +1,585 @@
+"""The single HTML page served by `cartograph serve`.
+
+Kept out of `server.py` so the request handling stays readable — this is
+markup, not logic. No build step, no framework, no external requests: the
+page is inlined exactly as written here.
+"""
+
+PAGE = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Cartograph</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --panel2: #0b0d11; --border: #2a2e37;
+    --text: #e6e8eb; --muted: #8a8f98; --accent: #5b8cff; --accent-dim: #2d4a8a;
+    --ok: #4c9f70; --warn: #d9a441; --err: #d06060;
+    --mono: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+    --radius: 8px;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text); font-size: 14px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.55; display: flex; flex-direction: column;
+  }
+
+  /* --- header --- */
+  header {
+    display: flex; align-items: center; gap: 18px; padding: 0 20px;
+    height: 56px; border-bottom: 1px solid var(--border); background: var(--panel);
+    flex: 0 0 auto;
+  }
+  .brand { display: flex; align-items: baseline; gap: 10px; }
+  .brand h1 { font-size: 16px; margin: 0; letter-spacing: -0.01em; }
+  .brand .tag { color: var(--muted); font-size: 12.5px; }
+  nav { display: flex; gap: 4px; margin-left: 8px; }
+  nav button {
+    background: none; border: none; color: var(--muted); padding: 7px 14px;
+    border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500;
+  }
+  nav button:hover { color: var(--text); background: #212630; }
+  nav button.active { color: var(--text); background: #212630; }
+  .spacer { flex: 1; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px; font-size: 12px;
+    color: var(--muted); border: 1px solid var(--border); border-radius: 999px;
+    padding: 4px 11px; white-space: nowrap;
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: 0 0 auto; }
+  .dot.on { background: var(--ok); }
+  .dot.off { background: var(--warn); }
+
+  /* --- layout --- */
+  main { flex: 1 1 auto; overflow-y: auto; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 26px 20px 60px; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 18px 20px; margin-bottom: 16px;
+  }
+  h2 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: 0.07em;
+    color: var(--muted); margin: 0 0 14px; font-weight: 600;
+  }
+  p.lede { margin: 0 0 18px; color: var(--muted); max-width: 70ch; }
+  code {
+    font-family: var(--mono); font-size: 12.5px; background: var(--panel2);
+    border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px;
+  }
+  .mono { font-family: var(--mono); }
+  a { color: var(--accent); }
+
+  /* --- controls --- */
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  input[type=text] {
+    flex: 1 1 320px; min-width: 200px; background: var(--panel2);
+    border: 1px solid var(--border); color: var(--text); padding: 10px 12px;
+    border-radius: 6px; font-family: var(--mono); font-size: 13px;
+  }
+  input[type=text]:focus { outline: none; border-color: var(--accent); }
+  button.btn {
+    background: var(--accent); border: 1px solid var(--accent); color: #fff;
+    padding: 10px 18px; border-radius: 6px; cursor: pointer; font-size: 13px;
+    font-weight: 500; white-space: nowrap;
+  }
+  button.btn:hover:not(:disabled) { filter: brightness(1.12); }
+  button.btn:disabled { opacity: 0.5; cursor: default; }
+  button.ghost {
+    background: transparent; border: 1px solid var(--border); color: var(--text);
+    padding: 7px 13px; border-radius: 6px; cursor: pointer; font-size: 12.5px;
+  }
+  button.ghost:hover:not(:disabled) { background: #212630; }
+  button.ghost:disabled { opacity: 0.45; cursor: default; }
+  .hint { color: var(--muted); font-size: 12.5px; margin-top: 10px; }
+  kbd {
+    font-family: var(--mono); font-size: 11px; border: 1px solid var(--border);
+    border-bottom-width: 2px; border-radius: 4px; padding: 1px 5px;
+    background: var(--panel2); color: var(--muted);
+  }
+
+  /* --- examples --- */
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
+  .card {
+    text-align: left; background: var(--panel2); border: 1px solid var(--border);
+    border-radius: 6px; padding: 13px 14px; cursor: pointer; color: var(--text);
+    font: inherit; transition: border-color .12s, background .12s;
+  }
+  .card:hover { border-color: var(--accent-dim); background: #10141b; }
+  .card .label { font-weight: 600; font-size: 13px; }
+  .card .path { color: var(--muted); font-family: var(--mono); font-size: 11.5px; margin: 3px 0; word-break: break-all; }
+  .card .desc { color: var(--muted); font-size: 12px; }
+
+  /* --- status / stats --- */
+  .status { margin-top: 14px; }
+  .box { border: 1px solid var(--border); border-radius: 6px; padding: 13px 15px; background: var(--panel2); }
+  .box.ok { border-color: #2f5d45; }
+  .box.err { border-color: #5d3434; }
+  .box.err .title { color: var(--err); font-weight: 600; margin-bottom: 4px; }
+  .stats { display: flex; flex-wrap: wrap; gap: 20px; margin: 12px 0 0; }
+  .stat .n { font-size: 19px; font-weight: 650; font-family: var(--mono); line-height: 1.2; }
+  .stat .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+  .spin {
+    display: inline-block; width: 12px; height: 12px; border: 2px solid var(--border);
+    border-top-color: var(--accent); border-radius: 50%;
+    animation: spin .7s linear infinite; vertical-align: -2px; margin-right: 7px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* --- inline viewer --- */
+  .viewer { margin-top: 16px; display: none; }
+  .viewer.show { display: block; }
+  .viewer-bar {
+    display: flex; align-items: center; gap: 8px; padding: 9px 12px;
+    background: var(--panel); border: 1px solid var(--border);
+    border-bottom: none; border-radius: var(--radius) var(--radius) 0 0;
+  }
+  .viewer-bar .name { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .viewer iframe {
+    display: block; width: 100%; height: 620px; border: 1px solid var(--border);
+    border-radius: 0 0 var(--radius) var(--radius); background: var(--bg);
+  }
+  body.zen header, body.zen .no-zen { display: none; }
+  body.zen .wrap { max-width: none; padding: 0; }
+  body.zen .viewer iframe { height: calc(100vh - 40px); border-radius: 0; border-left: none; border-right: none; }
+  body.zen .viewer-bar { border-radius: 0; }
+
+  /* --- migrate --- */
+  .steps { counter-reset: s; margin: 0; padding: 0; list-style: none; }
+  .steps li {
+    counter-increment: s; position: relative; padding-left: 30px; margin-bottom: 9px;
+    color: var(--muted); font-size: 13px;
+  }
+  .steps li::before {
+    content: counter(s); position: absolute; left: 0; top: 1px;
+    width: 19px; height: 19px; border-radius: 50%; background: var(--panel2);
+    border: 1px solid var(--border); color: var(--muted);
+    font-size: 11px; display: grid; place-items: center; font-family: var(--mono);
+  }
+  .steps li b { color: var(--text); font-weight: 600; }
+  .log {
+    margin-top: 14px; background: var(--panel2); border: 1px solid var(--border);
+    border-radius: 6px; padding: 10px 12px; height: 260px; overflow-y: auto;
+    font-family: var(--mono); font-size: 11.5px; line-height: 1.65; display: none;
+  }
+  .log.show { display: block; }
+  .log div { white-space: pre-wrap; word-break: break-word; }
+  .log .t-tool { color: var(--accent); }
+  .log .t-gate { color: var(--ok); }
+  .log .t-warn { color: var(--warn); }
+  .log .t-err { color: var(--err); }
+  .log .t-dim { color: var(--muted); }
+
+  .diff {
+    margin-top: 14px; background: var(--panel2); border: 1px solid var(--border);
+    border-radius: 6px; overflow-x: auto; font-family: var(--mono);
+    font-size: 12px; line-height: 1.6; display: none;
+  }
+  .diff.show { display: block; }
+  .diff div { padding: 0 12px; white-space: pre; }
+  .diff .add { background: rgba(76,159,112,.13); color: #8fd6ae; }
+  .diff .del { background: rgba(208,96,96,.13); color: #e29a9a; }
+  .diff .hd { color: var(--muted); }
+
+  .report {
+    margin-top: 14px; border: 1px solid var(--border); border-radius: 6px;
+    padding: 4px 16px 14px; background: var(--panel2); display: none;
+  }
+  .report.show { display: block; }
+  .report h1, .report h2, .report h3 { font-size: 13px; margin: 14px 0 6px; color: var(--text); text-transform: none; letter-spacing: 0; }
+  .report ul { margin: 6px 0; padding-left: 20px; }
+  .report li { margin: 3px 0; font-size: 13px; }
+  .report p { font-size: 13px; margin: 6px 0; }
+  .report strong { color: var(--text); }
+  .report hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+
+  .verdict { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 7px; border-radius: 999px;
+    padding: 5px 13px; font-size: 12.5px; border: 1px solid var(--border);
+  }
+  .pill.ok { border-color: #2f5d45; color: #8fd6ae; }
+  .pill.warn { border-color: #5d4c2f; color: #e0c184; }
+
+  ul.recent { list-style: none; margin: 0; padding: 0; }
+  ul.recent li {
+    display: flex; align-items: center; gap: 12px; padding: 7px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  ul.recent li:last-child { border-bottom: none; }
+  ul.recent .nm { flex: 1; font-family: var(--mono); font-size: 12px; word-break: break-all; }
+  ul.recent .when { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
+  .empty { color: var(--muted); font-style: italic; font-size: 13px; }
+  .tab { display: none; }
+  .tab.active { display: block; }
+</style>
+</head>
+<body>
+
+<header class="no-zen">
+  <div class="brand">
+    <h1>Cartograph</h1>
+    <span class="tag">code intelligence for Python repos</span>
+  </div>
+  <nav>
+    <button id="tab-explore" class="active" data-tab="explore">Explore</button>
+    <button id="tab-migrate" data-tab="migrate">Migrate</button>
+  </nav>
+  <div class="spacer"></div>
+  <span class="chip" id="keychip" title="Only Migrate needs an API key."><span class="dot" id="keydot"></span><span id="keytext">checking…</span></span>
+  <span class="chip mono" id="cwdchip" title="Relative paths resolve from here.">…</span>
+</header>
+
+<main>
+<div class="wrap">
+
+  <!-- ================= EXPLORE ================= -->
+  <section class="tab active" id="explore">
+    <div class="panel no-zen">
+      <h2>Map a repository</h2>
+      <p class="lede">
+        Parses every <code>.py</code> file with tree-sitter and builds a call graph &mdash;
+        every file, class and function, with each function's outgoing calls resolved to
+        where they're defined. No API key needed.
+      </p>
+      <div class="row">
+        <input id="path" type="text" spellcheck="false" autocomplete="off"
+               placeholder="src/cartograph   or   C:\\path\\to\\your\\repo" />
+        <button class="btn" id="build">Build map</button>
+      </div>
+      <div class="hint">
+        A local directory. <kbd>Enter</kbd> to build, <kbd>/</kbd> to jump to this box.
+        Remote git URLs aren't supported &mdash; clone first, then point here.
+      </div>
+      <div class="status" id="status"></div>
+    </div>
+
+    <div class="panel no-zen" id="examples-panel">
+      <h2>Or start with an example</h2>
+      <div class="cards" id="examples"><div class="empty">Loading&hellip;</div></div>
+    </div>
+
+    <div class="viewer" id="viewer">
+      <div class="viewer-bar">
+        <span class="name" id="viewer-name"></span>
+        <div class="spacer"></div>
+        <button class="ghost" id="zen" title="Toggle full screen">Full screen</button>
+        <button class="ghost" id="newtab">Open in new tab</button>
+        <button class="ghost no-zen" id="closev">Close</button>
+      </div>
+      <iframe id="frame" title="Dependency map"></iframe>
+    </div>
+
+    <div class="panel no-zen">
+      <h2>Previously built</h2>
+      <ul class="recent" id="recent"><li class="empty">Nothing yet.</li></ul>
+    </div>
+  </section>
+
+  <!-- ================= MIGRATE ================= -->
+  <section class="tab" id="migrate">
+    <div class="panel">
+      <h2>Automated migration, verified by tests</h2>
+      <p class="lede">
+        Converts a <code>unittest</code> suite to plain <code>pytest</code> asserts. The model
+        never writes code &mdash; it decides <em>what</em> to attempt, and every rewrite goes
+        through libcst against a real syntax tree, gated on the test suite.
+      </p>
+      <ol class="steps">
+        <li><b>Index</b> &mdash; build the symbol graph for the repo.</li>
+        <li><b>Scout &amp; Plan</b> &mdash; narrow to relevant symbols, order the work.</li>
+        <li><b>Rewrite</b> &mdash; snapshot, apply the codemod, run pytest. Roll back if red.</li>
+        <li><b>Adjudicate</b> &mdash; anything the codemod isn't sure about gets
+            <b>quarantined</b>: left byte-for-byte unchanged for a human.</li>
+        <li><b>Report</b> &mdash; summarise what changed and what didn't.</li>
+      </ol>
+      <div class="row" style="margin-top:16px">
+        <button class="btn" id="migrate-run">Run migration</button>
+        <span class="hint" style="margin:0" id="migrate-note">
+          Runs on a throwaway copy of the bundled sample repo &mdash; your files are never touched.
+        </span>
+      </div>
+      <div class="status" id="migrate-status"></div>
+      <div class="log" id="migrate-log"></div>
+      <div class="verdict" id="migrate-verdict"></div>
+      <div class="diff" id="migrate-diff"></div>
+      <div class="report" id="migrate-report"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Run it on your own repo</h2>
+      <p class="lede" style="margin-bottom:10px">
+        The UI deliberately won't rewrite an arbitrary directory for you. From a terminal:
+      </p>
+      <div class="mono" style="font-size:12.5px">
+        <code>cartograph run &lt;repo&gt; "convert unittest tests to pytest"</code>
+      </div>
+      <div class="hint">Commit first &mdash; it edits files in place (with snapshot/rollback per step).</div>
+    </div>
+  </section>
+
+</div>
+</main>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const esc = (s) => { const d = document.createElement("div"); d.textContent = s == null ? "" : String(s); return d.innerHTML; };
+
+let building = false, migrating = false, currentTree = null;
+
+/* ---------------- tabs ---------------- */
+document.querySelectorAll("nav button").forEach((b) => {
+  b.addEventListener("click", () => {
+    document.querySelectorAll("nav button").forEach((x) => x.classList.toggle("active", x === b));
+    document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.id === b.dataset.tab));
+  });
+});
+
+/* ---------------- state ---------------- */
+async function loadState() {
+  let s;
+  try { s = await (await fetch("/api/state")).json(); } catch (e) { return; }
+
+  $("cwdchip").textContent = s.cwd;
+  $("cwdchip").title = "Relative paths resolve from " + s.cwd;
+
+  const dot = $("keydot");
+  dot.className = "dot " + (s.has_api_key ? "on" : "off");
+  $("keytext").textContent = s.has_api_key ? "API key set" : "no API key";
+  $("keychip").title = s.has_api_key
+    ? "GROQ_API_KEY found. Migrate is available."
+    : "GROQ_API_KEY is not set. Explore works fine; Migrate needs a key in .env";
+  if (!s.has_api_key) {
+    $("migrate-run").disabled = true;
+    $("migrate-note").innerHTML =
+      'Needs <code>GROQ_API_KEY</code> in <code>.env</code> &mdash; copy <code>.env.example</code> and paste a key.';
+  }
+
+  const ex = $("examples");
+  if (!s.examples.length) {
+    ex.innerHTML = '<div class="empty">No example directories found from here.</div>';
+  } else {
+    ex.innerHTML = s.examples.map((e) => `
+      <button class="card" data-path="${esc(e.path)}">
+        <div class="label">${esc(e.label)}</div>
+        <div class="path">${esc(e.path)}</div>
+        <div class="desc">${esc(e.description)}</div>
+      </button>`).join("");
+    ex.querySelectorAll("button[data-path]").forEach((b) => {
+      b.addEventListener("click", () => { $("path").value = b.dataset.path; build(); });
+    });
+  }
+  renderRecent(s.recent);
+}
+
+function renderRecent(recent) {
+  const el = $("recent");
+  if (!recent || !recent.length) { el.innerHTML = '<li class="empty">Nothing yet.</li>'; return; }
+  el.innerHTML = recent.map((r) => `
+    <li>
+      <span class="nm">${esc(r.filename)}</span>
+      <span class="when">${esc(r.modified)}</span>
+      <button class="ghost" data-open="${esc(r.filename)}">View</button>
+    </li>`).join("");
+  el.querySelectorAll("button[data-open]").forEach((b) => {
+    b.addEventListener("click", () => showTree(b.dataset.open, b.dataset.open));
+  });
+}
+
+/* ---------------- explore ---------------- */
+function showTree(filename, label) {
+  currentTree = filename;
+  $("frame").src = "/tree/" + encodeURIComponent(filename);
+  $("viewer-name").textContent = label || filename;
+  $("viewer").classList.add("show");
+  $("viewer").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+async function build() {
+  if (building) return;
+  const repoPath = $("path").value.trim();
+  const status = $("status");
+  if (!repoPath) {
+    status.innerHTML = '<div class="box err"><div class="title">No path given</div>Type a directory path, or pick an example below.</div>';
+    return;
+  }
+
+  building = true;
+  $("build").disabled = true;
+  status.innerHTML = `<div class="box"><span class="spin"></span>Indexing <span class="mono">${esc(repoPath)}</span>&hellip;</div>`;
+
+  let r;
+  try {
+    const res = await fetch("/api/build", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ repo_path: repoPath }),
+    });
+    r = await res.json();
+  } catch (e) {
+    r = { ok: false, error: "Could not reach the server: " + e.message };
+  }
+
+  if (r.ok) {
+    status.innerHTML = `
+      <div class="box ok">
+        <div>Mapped <span class="mono">${esc(r.repo_path)}</span> in ${r.duration_seconds}s</div>
+        <div class="stats">
+          <div class="stat"><div class="n">${r.symbols}</div><div class="k">symbols</div></div>
+          <div class="stat"><div class="n">${r.edges}</div><div class="k">call edges</div></div>
+          <div class="stat"><div class="n">${r.resolved}</div><div class="k">resolved</div></div>
+          <div class="stat"><div class="n">${r.unresolved}</div><div class="k">unresolved</div></div>
+          <div class="stat"><div class="n">${r.files_indexed}</div><div class="k">files</div></div>
+          ${r.files_skipped ? `<div class="stat"><div class="n">${r.files_skipped}</div><div class="k">skipped</div></div>` : ""}
+        </div>
+      </div>`;
+    showTree(r.tree_filename, r.repo_path);
+    loadState();
+  } else {
+    status.innerHTML = `<div class="box err"><div class="title">Couldn't build that</div>${esc(r.error || "Unknown error.")}</div>`;
+    $("viewer").classList.remove("show");
+  }
+
+  building = false;
+  $("build").disabled = false;
+}
+
+$("build").addEventListener("click", build);
+$("path").addEventListener("keydown", (e) => { if (e.key === "Enter") build(); });
+$("closev").addEventListener("click", () => $("viewer").classList.remove("show"));
+$("newtab").addEventListener("click", () => {
+  if (currentTree) window.open("/tree/" + encodeURIComponent(currentTree), "_blank", "noopener");
+});
+$("zen").addEventListener("click", () => {
+  document.body.classList.toggle("zen");
+  $("zen").textContent = document.body.classList.contains("zen") ? "Exit full screen" : "Full screen";
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    if (document.body.classList.contains("zen")) { document.body.classList.remove("zen"); $("zen").textContent = "Full screen"; }
+    else $("viewer").classList.remove("show");
+  }
+  const typing = /^(INPUT|TEXTAREA)$/.test((e.target.tagName || ""));
+  if (e.key === "/" && !typing) { e.preventDefault(); $("path").focus(); $("path").select(); }
+});
+
+/* ---------------- migrate ---------------- */
+const TAG_CLASS = [
+  [/\\[tool:/, "t-tool"], [/\\[gate:/, "t-gate"], [/\\[provider:/, "t-dim"],
+  [/quarantin/i, "t-warn"], [/error|failed|crash/i, "t-err"],
+];
+
+function logLine(text) {
+  const el = $("migrate-log");
+  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  const d = document.createElement("div");
+  let cls = "t-dim";
+  for (const [re, c] of TAG_CLASS) { if (re.test(text)) { cls = c; break; } }
+  d.className = cls;
+  d.textContent = text;
+  el.appendChild(d);
+  if (atBottom) el.scrollTop = el.scrollHeight;
+}
+
+function renderDiff(diffText) {
+  const el = $("migrate-diff");
+  if (!diffText) { el.classList.remove("show"); return; }
+  el.innerHTML = diffText.split("\\n").map((l) => {
+    let c = "";
+    if (l.startsWith("+++") || l.startsWith("---") || l.startsWith("@@")) c = "hd";
+    else if (l.startsWith("+")) c = "add";
+    else if (l.startsWith("-")) c = "del";
+    return `<div class="${c}">${esc(l) || "&nbsp;"}</div>`;
+  }).join("");
+  el.classList.add("show");
+}
+
+/* Minimal markdown -> HTML for the report. Headings, lists, bold, code, rules. */
+function md(src) {
+  const lines = String(src || "").split("\\n");
+  let out = "", inList = false;
+  const inline = (s) => esc(s)
+    .replace(/\\*\\*([^*]+)\\*\\*/g, "<strong>$1</strong>")
+    .replace(/`([^`]+)`/g, "<code>$1</code>");
+  for (let raw of lines) {
+    const l = raw.trim();
+    const li = l.match(/^[-*]\\s+(.*)$/);
+    if (li) { if (!inList) { out += "<ul>"; inList = true; } out += "<li>" + inline(li[1]) + "</li>"; continue; }
+    if (inList) { out += "</ul>"; inList = false; }
+    const h = l.match(/^(#{1,6})\\s+(.*)$/);
+    if (h) { out += "<h3>" + inline(h[2]) + "</h3>"; continue; }
+    if (/^(-{3,}|\\*{3,})$/.test(l)) { out += "<hr />"; continue; }
+    if (l) out += "<p>" + inline(l) + "</p>";
+  }
+  if (inList) out += "</ul>";
+  return out;
+}
+
+async function runMigration() {
+  if (migrating) return;
+  migrating = true;
+  $("migrate-run").disabled = true;
+  $("migrate-log").innerHTML = "";
+  $("migrate-log").classList.add("show");
+  $("migrate-diff").classList.remove("show");
+  $("migrate-report").classList.remove("show");
+  $("migrate-verdict").innerHTML = "";
+  $("migrate-status").innerHTML = '<div class="box"><span class="spin"></span>Running the pipeline&hellip;</div>';
+
+  let jobId;
+  try {
+    const res = await fetch("/api/migrate", { method: "POST" });
+    const j = await res.json();
+    if (!j.job_id) throw new Error(j.error || "could not start");
+    jobId = j.job_id;
+  } catch (e) {
+    $("migrate-status").innerHTML = `<div class="box err"><div class="title">Couldn't start</div>${esc(e.message)}</div>`;
+    migrating = false; $("migrate-run").disabled = false;
+    return;
+  }
+
+  let seen = 0;
+  while (true) {
+    await new Promise((r) => setTimeout(r, 450));
+    let j;
+    try { j = await (await fetch("/api/job/" + jobId)).json(); }
+    catch (e) { continue; }
+
+    (j.lines || []).slice(seen).forEach(logLine);
+    seen = (j.lines || []).length;
+
+    if (j.status === "running") continue;
+
+    if (j.status === "error") {
+      $("migrate-status").innerHTML =
+        `<div class="box err"><div class="title">Run failed</div>${esc(j.error || "Unknown error.")}</div>`;
+    } else {
+      const r = j.result || {};
+      $("migrate-status").innerHTML =
+        `<div class="box ok">Finished in ${r.duration_seconds}s &mdash; ${r.llm_calls} LLM calls, ${r.llm_tokens} tokens.</div>`;
+      $("migrate-verdict").innerHTML =
+        `<span class="pill ok">${r.committed_count} rewritten &amp; tests green</span>` +
+        `<span class="pill warn">${r.quarantined_count} quarantined &mdash; left unchanged</span>`;
+      renderDiff(r.diff);
+      if (r.report_markdown) {
+        $("migrate-report").innerHTML = md(r.report_markdown);
+        $("migrate-report").classList.add("show");
+      }
+    }
+    break;
+  }
+
+  migrating = false;
+  $("migrate-run").disabled = false;
+}
+
+$("migrate-run").addEventListener("click", runMigration);
+
+loadState();
+</script>
+</body>
+</html>
+"""

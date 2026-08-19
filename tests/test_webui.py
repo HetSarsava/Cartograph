@@ -6,10 +6,15 @@ attention since it's the one place untrusted input reaches the filesystem;
 `bind` is the only part that touches a real socket.
 """
 
+import logging
+import re
+import time
 from pathlib import Path
 
 import pytest
 
+from cartograph.webui.jobs import JobRunner, find_sample_repo
+from cartograph.webui.page import PAGE
 from cartograph.webui.server import (
     PortInUseError,
     bind,
@@ -212,3 +217,112 @@ def test_a_second_bind_on_the_same_port_is_refused_not_silently_shared():
             bind(first.server_address[1])
     finally:
         first.server_close()
+
+
+# --- background jobs ----------------------------------------------------
+
+
+def _wait(runner, job_id, timeout=5.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        job = runner.get(job_id)
+        if job is not None and job.status != "running":
+            return job
+        time.sleep(0.02)
+    raise AssertionError("job did not finish in time")
+
+
+def test_job_runner_reports_result_and_captured_lines():
+    runner = JobRunner()
+    job_id = runner.start(lambda job, lock: {"answer": 42})
+
+    job = _wait(runner, job_id)
+
+    assert job.status == "done"
+    assert job.result == {"answer": 42}
+    assert job.error is None
+
+
+def test_job_runner_captures_failure_instead_of_killing_the_thread():
+    """A failed migration has to surface in the UI, not vanish into a thread."""
+    runner = JobRunner()
+
+    def boom(job, lock):
+        raise RuntimeError("pipeline exploded")
+
+    job = _wait(runner, runner.start(boom))
+
+    assert job.status == "error"
+    assert "pipeline exploded" in job.error
+
+
+def test_job_runner_streams_pipeline_log_lines_to_the_job():
+    """The live log is the point of the Migrate tab -- pipeline records must
+    reach the job while it runs, and unrelated loggers must not."""
+    runner = JobRunner()
+
+    def work(job, lock):
+        logging.getLogger("cartograph.pipeline.nodes").info("[tool:index_repo] symbols=18")
+        logging.getLogger("cartograph.webui.server").info("noise that should not show")
+        return {}
+
+    job = _wait(runner, runner.start(work))
+
+    assert "[tool:index_repo] symbols=18" in job.lines
+    assert not any("noise" in line for line in job.lines)
+
+
+def test_job_runner_is_busy_only_while_running():
+    runner = JobRunner()
+    assert runner.busy() is False
+    job_id = runner.start(lambda job, lock: {})
+    _wait(runner, job_id)
+    assert runner.busy() is False
+
+
+def test_get_unknown_job_returns_none():
+    assert JobRunner().get("nope") is None
+
+
+# --- demo fixture lookup ------------------------------------------------
+
+
+def test_find_sample_repo_locates_the_bundled_fixture():
+    """Found by searching upward, so it survives modules moving directories."""
+    found = find_sample_repo()
+
+    assert found.is_dir()
+    assert (found / "tests" / "test_legacy_unittest.py").is_file()
+    assert found == FIXTURE_REPO.resolve()
+
+
+def test_bundled_fixture_is_still_pre_migration():
+    """The demo has nothing to show if the fixture ships already converted --
+    which is exactly how it got committed once before."""
+    source = (find_sample_repo() / "tests" / "test_legacy_unittest.py").read_text(encoding="utf-8")
+
+    assert "self.assertEqual" in source
+    assert "unittest.TestCase" in source
+
+
+# --- page ---------------------------------------------------------------
+
+
+def test_page_references_only_elements_it_defines():
+    """A typo in a getElementById would break the UI silently at runtime."""
+    html = PAGE.split("<script>")[0]
+    js = re.search(r"<script>(.*?)</script>", PAGE, re.S).group(1)
+
+    defined = set(re.findall(r'id="([^"]+)"', html))
+    used = set(re.findall(r'\$\("([^"]+)"\)', js))
+
+    assert used - defined == set(), f"JS references missing ids: {sorted(used - defined)}"
+
+
+def test_page_is_self_contained():
+    """A strict no-network page: everything inline, nothing fetched remotely."""
+    assert "<script>" in PAGE
+    assert "src=\"http" not in PAGE
+    assert "href=\"http" not in PAGE.split("<script>")[0].replace(
+        'href="https://console.groq.com/keys"', ""
+    )
