@@ -1,6 +1,5 @@
 """A tiny unittest.TestCase suite that the unittest_to_pytest codemod recipe
 should fully convert to plain pytest asserts (no ambiguous assertions here)."""
-import pytest
 
 import unittest
 
@@ -10,14 +9,17 @@ from sample_pkg.utils import add, double
 
 class CalculatorTests(unittest.TestCase):
     def test_add(self):
-        assert add(2, 3) == 5
+        self.assertEqual(add(2, 3), 5)
 
     def test_double(self):
-        assert double(4) == 8
+        self.assertEqual(double(4), 8)
+
+    def test_is_positive(self):
+        self.assertTrue(add(2, 3) > 0)
 
     def test_not_negative(self):
-        assert not (add(-1, -1) > 0)
+        self.assertFalse(add(-1, -1) > 0)
 
     def test_compute_raises_on_bad_input(self):
-        with pytest.raises(TypeError):
+        with self.assertRaises(TypeError):
             Calculator().compute("x", 1)

@@ -256,11 +256,38 @@ def reporter_node(state: RunState) -> dict:
     logger.info("[orchestrator] thread=%s enter reporter", thread_id)
 
     done_steps = state.get("plan_steps_done", [])
-    rewriter_result = state.get("rewriter_result")
+    committed = set(state.get("committed_symbol_ids", []))
+    quarantined = set(state.get("quarantined_symbol_ids", []))
+
+    # Describe what actually happened per step, not what the Planner intended.
+    # Feeding the planned `step.action` here let the Reporter narrate rewrites
+    # the codemod never performed (and call quarantined files "converted").
+    step_summaries = []
+    for step in done_steps:
+        if step.symbol_id in quarantined:
+            outcome = "QUARANTINED - left unchanged, needs a human"
+        elif step.symbol_id in committed:
+            outcome = "COMMITTED - rewritten, tests green"
+        else:
+            outcome = "no change needed"
+        step_summaries.append(f"{step.symbol_id}: {outcome}")
+
     request = ReporterRequest(
         task_description=state["task_description"],
-        step_summaries=[f"{step.symbol_id}: {step.action}" for step in done_steps],
-        tests_passed=bool(rewriter_result and rewriter_result.success),
+        step_summaries=step_summaries,
+        # Whether the repo is green at the end -- NOT whether every target
+        # was migrated. A committed step passed its test gate; a quarantined
+        # step was never written to disk. So the tree is healthy unless a
+        # step ended in neither bucket, meaning the run stopped midway.
+        # (This previously read only the *last* step's rewriter_result, so a
+        # single trailing quarantined step reported a clean run as failed.)
+        tests_passed=all(s.symbol_id in committed | quarantined for s in done_steps),
+        notes=[
+            f"{len(committed)} target(s) committed, {len(quarantined)} quarantined.",
+            "Quarantined targets were left byte-for-byte unchanged on disk.",
+            "Committed targets had only their assertions rewritten; class "
+            "structure and test names are unchanged.",
+        ],
     )
     result = run_reporter(_build_provider(), request)
 

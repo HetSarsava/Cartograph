@@ -54,7 +54,7 @@ def run_reporter(provider: Provider, request: ReporterRequest) -> ReporterRespon
         request.notes,
     )
 
-    status = "PASSED" if request.tests_passed else "FAILED"
+    status = "GREEN" if request.tests_passed else "BROKEN"
     messages = [
         LLMMessage(
             role="system",
@@ -62,14 +62,17 @@ def run_reporter(provider: Provider, request: ReporterRequest) -> ReporterRespon
                 "You are Reporter, the final agent in a code-migration pipeline. Write a "
                 "concise Markdown report of a completed run for a human reader: what changed, "
                 "what didn't, and why. Use headings and bullet points. Do not invent details "
-                "not present in the input — if a step's outcome is unclear, say so plainly."
+                "not present in the input. A QUARANTINED target is a success, not a "
+                "failure: it means the codemod found genuine ambiguity and correctly "
+                "declined to guess, leaving the file untouched for a human. Never call "
+                "the run failed because something was quarantined."
             ),
         ),
         LLMMessage(
             role="user",
             content=(
                 f"Task: {request.task_description}\n"
-                f"Final test status: {status}\n\n"
+                f"Repository test status after the run: {status}\n\n"
                 "Step summaries:\n" + ("\n".join(f"- {s}" for s in request.step_summaries) or "(none)")
                 + "\n\nNotes:\n"
                 + ("\n".join(f"- {n}" for n in request.notes) or "(none)")

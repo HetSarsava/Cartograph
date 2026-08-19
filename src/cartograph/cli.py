@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import logging
+import os
+import shutil
+import stat
+import sys
 import time
 import uuid
 from datetime import UTC, datetime
@@ -18,6 +22,7 @@ from cartograph.graph.tree_export import export_tree_html
 from cartograph.logging_setup import configure_logging
 from cartograph.pipeline.graph import build_graph
 from cartograph.pipeline.state import RunState
+from cartograph.providers.base import ProviderError
 from cartograph.providers.groq_provider import call_stats
 from cartograph.webui.server import DEFAULT_PORT, PortInUseError, bind, serve
 
@@ -56,6 +61,12 @@ def run(repo_path: str, task: str, thread_id: str | None, log_level: str) -> Non
 
     call_stats.reset()
     settings = get_settings()
+    if not settings.groq_api_key:
+        raise click.ClickException(
+            "GROQ_API_KEY is not set, and `run` needs it to call the agents.\n"
+            "  cp .env.example .env   # then paste a key from https://console.groq.com/keys\n"
+            "Everything else (index / tree / serve) works without a key."
+        )
     logger.info(
         "[orchestrator] starting run thread=%s repo_path=%s model=%s task=%r",
         resolved_thread_id,
@@ -75,10 +86,21 @@ def run(repo_path: str, task: str, thread_id: str | None, log_level: str) -> Non
     start = time.monotonic()
     try:
         final_state = graph.invoke(initial_state, config=config)
-    except Exception:
+    except Exception as exc:
+        # A provider failure is nearly always a wrong model id, a bad key, or a
+        # spent quota. Say which, in one line -- a traceback adds nothing and
+        # buries the actionable part.
+        cause = _find_provider_error(exc)
+        if cause is not None:
+            logger.error("[orchestrator] run thread=%s failed: %s", resolved_thread_id, cause)
+            raise click.ClickException(
+                f"{cause}" + chr(10) +
+                f"Check GROQ_MODEL in .env (currently {settings.groq_model!r}); "
+                f"run `cartograph models` to list the ids your key can use." + chr(10) +
+                f"Full log: {log_path}"
+            ) from exc
         logger.exception("[orchestrator] run thread=%s crashed", resolved_thread_id)
-        click.echo(f"\nRun crashed — see {log_path} for the full traceback.", err=True)
-        click.echo(f"Full log: {log_path}")
+        click.echo(f"Run crashed. Full log: {log_path}", err=True)
         raise
     duration_seconds = time.monotonic() - start
 
@@ -92,6 +114,82 @@ def run(repo_path: str, task: str, thread_id: str | None, log_level: str) -> Non
 
     _print_summary(final_state, duration_seconds, resolved_thread_id)
     click.echo(f"\nFull log: {log_path}")
+
+
+def _force_rmtree(path: Path) -> None:
+    """Delete `path`, including read-only files.
+
+    The pipeline's snapshot tool creates a .git directory inside the repo it
+    works on, and git marks its object files read-only. On Windows that makes
+    plain shutil.rmtree fail with PermissionError -- which would break the
+    demo on its *second* run, the one you do in front of an audience.
+    """
+
+    def on_error(func, target, _exc):
+        os.chmod(target, stat.S_IWRITE)
+        func(target)
+
+    shutil.rmtree(path, onexc=on_error)
+
+
+@cli.command(name="demo")
+@click.option(
+    "--keep",
+    is_flag=True,
+    default=False,
+    help="Keep the previous demo copy instead of starting from a fresh one.",
+)
+@click.pass_context
+def demo_cmd(ctx: click.Context, keep: bool) -> None:
+    """Run the full pipeline against a throwaway copy of the bundled sample repo.
+
+    The pipeline rewrites files in place, so pointing it at the committed
+    fixture would spend the demo after one run -- and a converted fixture has
+    nothing left to convert. This copies the sample repo to ./logs/demo-repo
+    first, so the demo is repeatable and the fixture is never touched.
+
+    Example:
+
+        cartograph demo
+    """
+    source = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "sample_repo"
+    if not source.is_dir():
+        raise click.ClickException(f"Bundled sample repo not found at {source}")
+
+    target = Path("logs") / "demo-repo"
+    if target.exists() and not keep:
+        _force_rmtree(target)
+    if not target.exists():
+        shutil.copytree(source, target, ignore=shutil.ignore_patterns("__pycache__", ".git"))
+
+    before = (target / "tests" / "test_legacy_unittest.py").read_text(encoding="utf-8")
+
+    click.echo("Cartograph demo")
+    click.echo(f"  sample repo copied to: {target}")
+    click.echo("  task: convert unittest tests to pytest")
+    click.echo("")
+    click.echo("Before (tests/test_legacy_unittest.py):")
+    for line in before.splitlines():
+        if "self.assert" in line:
+            click.echo(f"    {line.strip()}")
+    click.echo("")
+
+    ctx.invoke(
+        run,
+        repo_path=str(target),
+        task="convert unittest tests to pytest",
+        thread_id=None,
+        log_level="INFO",
+    )
+
+    after = (target / "tests" / "test_legacy_unittest.py").read_text(encoding="utf-8")
+    click.echo("")
+    click.echo("After (tests/test_legacy_unittest.py):")
+    for line in after.splitlines():
+        if line.strip().startswith("assert ") or "pytest.raises" in line:
+            click.echo(f"    {line.strip()}")
+    click.echo("")
+    click.echo(f"Full converted repo: {target.resolve()}")
 
 
 @cli.command(name="index")
@@ -132,6 +230,23 @@ def index_cmd(repo_path: str, visualize: bool) -> None:
     click.echo(_summary_line(repo_path, graph))
     if sink is not None:
         click.echo(f"Event file: {sink.path}")
+
+
+def _find_provider_error(exc: BaseException) -> ProviderError | None:
+    """Find a ProviderError anywhere in `exc`'s cause chain.
+
+    The chain runs ProviderError -> the underlying SDK error, so walking all
+    the way to the root would step straight past the one type we can give a
+    useful message for.
+    """
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        if isinstance(current, ProviderError):
+            return current
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+    return None
 
 
 def _summary_line(repo_path: str, graph: SymbolGraph) -> str:
@@ -206,6 +321,34 @@ def serve_cmd(port: int, no_browser: bool, log_level: str) -> None:
     click.echo("\nStopped.")
 
 
+@cli.command(name="models")
+def models_cmd() -> None:
+    """List the Groq model ids this API key can actually use.
+
+    Model ids go stale as providers retire them, which otherwise shows up as
+    a 404 partway through a run. Run this and copy one into GROQ_MODEL.
+    """
+    settings = get_settings()
+    if not settings.groq_api_key:
+        raise click.ClickException("GROQ_API_KEY is not set; nothing to list.")
+
+    from groq import Groq
+
+    try:
+        available = sorted(m.id for m in Groq(api_key=settings.groq_api_key).models.list().data)
+    except Exception as exc:
+        raise click.ClickException(f"Could not reach Groq: {exc}") from exc
+
+    click.echo(f"GROQ_MODEL is currently {settings.groq_model!r}")
+    if settings.groq_model not in available:
+        click.echo("  ^ that id is NOT in your key's list -- `run` will fail until you change it.")
+    click.echo("")
+    click.echo("Available to this key:")
+    for model_id in available:
+        marker = " <- current" if model_id == settings.groq_model else ""
+        click.echo(f"  {model_id}{marker}")
+
+
 def _print_summary(final_state: dict, duration_seconds: float, thread_id: str) -> None:
     committed = final_state.get("committed_symbol_ids", [])
     quarantined = final_state.get("quarantined_symbol_ids", [])
@@ -241,8 +384,25 @@ def _print_summary(final_state: dict, duration_seconds: float, thread_id: str) -
     click.echo(summary)
 
 
+def _force_utf8_output() -> None:
+    """Make stdout/stderr UTF-8 so model output can't crash the CLI.
+
+    Windows consoles default to a legacy code page (cp1252), and the agents
+    routinely emit arrows, em dashes, and box-drawing characters in their
+    reports. Printing one of those would otherwise raise UnicodeEncodeError
+    *after* a successful run -- the pipeline works, then the CLI dies on the
+    last line. `errors="replace"` keeps that a cosmetic fallback rather than
+    a crash on terminals that genuinely can't render the character.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
+
+
 def main() -> None:
     """Console-script entrypoint (see [project.scripts] in pyproject.toml)."""
+    _force_utf8_output()
     cli()
 
 

@@ -24,7 +24,10 @@ class Settings(BaseSettings):
         description="Groq API key. Required to actually call the LLM; tools and "
         "stubbed agents work without it.",
     )
-    groq_model: str = Field(default="llama-3.3-70b-versatile", description="Default Groq model id.")
+    groq_model: str = Field(
+        default="openai/gpt-oss-120b",
+        description="Default Groq model id. Must support JSON mode — see `groq.models.list()`.",
+    )
 
     max_llm_calls_per_run: int = Field(
         default=25,

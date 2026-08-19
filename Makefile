@@ -19,6 +19,8 @@ help:
 	@echo "  make format      ruff format ."
 	@echo "  make typecheck   mypy src/cartograph"
 	@echo "  make check       lint + typecheck + test-fast"
+	@echo "  make demo        full pipeline on a throwaway copy of the sample repo"
+	@echo "  make models      list Groq model ids your API key can use"
 	@echo "  make run         cartograph run \$$(REPO) \"\$$(TASK)\""
 	@echo "                   override with: make run REPO=... TASK=\"...\""
 	@echo "  make serve       start the local web UI (http://127.0.0.1:8765)"
@@ -52,6 +54,12 @@ typecheck:
 	uv run mypy src/cartograph
 
 check: lint typecheck test-fast
+
+demo:
+	uv run cartograph demo
+
+models:
+	uv run cartograph models
 
 run:
 	uv run cartograph run $(REPO) "$(TASK)"

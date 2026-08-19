@@ -17,6 +17,7 @@ deterministic, and network-free while still exercising the real routing fix.
 and is skipped when `GROQ_API_KEY` isn't set (e.g. CI without secrets).
 """
 
+import shutil
 from pathlib import Path
 from unittest.mock import patch
 
@@ -33,6 +34,20 @@ from cartograph.pipeline.state import RunState
 from cartograph.tools.codemod import CodemodAmbiguity
 
 FIXTURE_REPO = Path(__file__).parent / "fixtures" / "sample_repo"
+
+
+@pytest.fixture
+def sample_repo(tmp_path):
+    """A disposable copy of the fixture repo.
+
+    The pipeline rewrites files in place, so pointing a test at FIXTURE_REPO
+    directly edits the committed fixture -- `make test` would leave the repo
+    dirty and, worse, consume the unittest-style code the demo depends on.
+    """
+    dest = tmp_path / "sample_repo"
+    shutil.copytree(FIXTURE_REPO, dest)
+    return dest
+
 AMBIGUOUS_SYMBOL_ID = (
     "tests/test_legacy_unittest_ambiguous.py::AmbiguousAssertionTests.test_add_in_expected_set"
 )
@@ -99,7 +114,7 @@ def test_route_after_rewrite_budget_exceeded_forces_finish_step():
 # --- end-to-end regression test, mocked LLM-backed agents ---------------
 
 
-def test_pipeline_quarantines_ambiguous_step_without_looping():
+def test_pipeline_quarantines_ambiguous_step_without_looping(sample_repo):
     mock_scout = ScoutResponse(relevant_symbol_ids=[AMBIGUOUS_SYMBOL_ID], reasoning="mock")
     mock_planner = PlannerResponse(
         steps=[
@@ -131,7 +146,7 @@ def test_pipeline_quarantines_ambiguous_step_without_looping():
     ):
         graph = build_graph()
         initial_state: RunState = {
-            "repo_path": str(FIXTURE_REPO),
+            "repo_path": str(sample_repo),
             "task_description": "convert unittest-style assertions to plain pytest asserts",
             "thread_id": "test-ambiguity-loop",
         }
@@ -155,10 +170,10 @@ def test_pipeline_quarantines_ambiguous_step_without_looping():
 
 
 @_requires_groq_key
-def test_pipeline_runs_end_to_end_with_real_agents():
+def test_pipeline_runs_end_to_end_with_real_agents(sample_repo):
     graph = build_graph()
     initial_state: RunState = {
-        "repo_path": str(FIXTURE_REPO),
+        "repo_path": str(sample_repo),
         "task_description": "demo task for the scaffolded pipeline",
         "thread_id": "test-thread",
     }

@@ -4,6 +4,54 @@ Cartograph is a code-intelligence MCP server, plus a small LangGraph
 migration pipeline that exists to prove the server's tools actually work
 against a real repo.
 
+## Quickstart
+
+Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
+
+```bash
+uv sync                                  # install
+uv run cartograph tree src/cartograph    # no API key needed
+```
+
+That writes a standalone HTML map of the codebase you can open by
+double-clicking. For the full migration pipeline, add a Groq key:
+
+```bash
+cp .env.example .env                     # paste your key from console.groq.com/keys
+uv run cartograph demo                   # migrate a bundled sample repo, end to end
+```
+
+`cartograph demo` works on a throwaway copy, so you can run it as many times
+as you like and always see the same before/after.
+
+## What you can use it for
+
+**1. Understand an unfamiliar Python repo.**
+`cartograph tree <repo>` parses every `.py` file with tree-sitter and gives
+you one self-contained HTML page: every file, class, and function, with each
+function's outgoing calls nested underneath it and resolved to their
+definitions. No server, no API key, no account. Useful for onboarding, code
+review prep, or working out what a dependency actually does.
+
+**2. Answer "what breaks if I change this?"**
+The symbol graph backs `find_definition`, `find_callers`, and
+`blast_radius` (a BFS over the reverse call graph). These are exposed over
+MCP, so any MCP client — Claude Code included — can call them instead of
+grepping and guessing.
+
+**3. Run a mechanical migration you can actually trust.**
+`cartograph run <repo> "<task>"` migrates a codebase with an LLM in the
+loop for judgment only. The rewrites themselves go through libcst against a
+real syntax tree, every change is gated on the test suite, and anything the
+codemod isn't certain about is **quarantined** — left byte-for-byte
+unchanged for a human — rather than guessed at. The bundled example converts
+`unittest` assertions to plain `pytest` asserts.
+
+**4. Give a coding agent better tools.**
+`cartograph` is an MCP server first. `uv run python -m
+cartograph.mcp_server.server` exposes indexing, the graph queries, codemods,
+git snapshot/rollback, and a structured pytest wrapper to any MCP client.
+
 ## The problem
 
 Coding agents typically understand a repo the way a person would with only
@@ -72,7 +120,7 @@ cartograph/
 │       │   └── graph.py             # builds and compiles the StateGraph
 │       ├── webui/
 │       │   └── server.py            # stdlib-only local UI (`cartograph serve`)
-│       └── cli.py                   # run / index / tree / serve
+│       └── cli.py                   # demo / run / index / tree / serve / models
 ├── viewer/
 │   └── graph_viewer.html            # live viewer for --visualize event streams
 ├── tests/
@@ -119,15 +167,12 @@ each agent step.
 - `tools/context_packer.py` — `pack_context()`: the degradation-stage
   concept is documented, the loop raises `NotImplementedError`
 
-## Setup
+## Setup notes
 
-Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
-
-```bash
-uv sync
-cp .env.example .env   # then fill in GROQ_API_KEY
-uv run pytest
-```
+Only `run` and `demo` need `GROQ_API_KEY`; `index`, `tree`, and `serve` work
+without one. If a run fails with a 404 on the model id, the provider has
+retired it — `uv run cartograph models` lists what your key can currently
+use, and you set the winner as `GROQ_MODEL` in `.env`.
 
 ## Common tasks
 
@@ -138,6 +183,7 @@ A `Makefile` covers the day-to-day commands; on Windows without `make`,
 make setup       # uv sync
 make test        # full pytest suite, verbose
 make check       # lint + typecheck + test
+make demo        # full pipeline on a throwaway copy of the sample repo
 make run         # cartograph run against the sample fixture
 make serve       # local web UI at http://127.0.0.1:8765
 make tree        # standalone HTML dependency tree for the fixture repo
@@ -148,11 +194,13 @@ make help        # full list
 ## Commands
 
 ```bash
+cartograph demo                    # the whole pipeline on a bundled sample repo
 cartograph run <repo> "<task>"     # the full migration pipeline
 cartograph index <repo>            # index only, print summary counts
 cartograph index <repo> --visualize  # + live JSONL event stream to ./logs
 cartograph tree <repo>             # one self-contained HTML dependency tree
 cartograph serve                   # local web UI for the above
+cartograph models                  # list Groq model ids your key can use
 ```
 
 `cartograph tree` is the quickest way to see what the indexer found: it

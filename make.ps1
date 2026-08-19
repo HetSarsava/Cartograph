@@ -37,6 +37,8 @@ function Invoke-Check {
     Invoke-TestFast
 }
 
+function Invoke-Demo { uv run cartograph demo }
+function Invoke-Models { uv run cartograph models }
 function Invoke-Run { uv run cartograph run $Repo $Task }
 function Invoke-Serve { uv run cartograph serve }
 function Invoke-Tree { uv run cartograph tree $Repo }
@@ -64,6 +66,8 @@ function Show-Help {
     Write-Host "  .\make.ps1 format      ruff format ."
     Write-Host "  .\make.ps1 typecheck   mypy src/cartograph"
     Write-Host "  .\make.ps1 check       lint + typecheck + test-fast"
+    Write-Host "  .\make.ps1 demo        full pipeline on a throwaway copy of the sample repo"
+    Write-Host "  .\make.ps1 models      list Groq model ids your API key can use"
     Write-Host "  .\make.ps1 run         cartograph run <Repo> <Task>"
     Write-Host "                         override: .\make.ps1 run -Repo ... -Task '...'"
     Write-Host "  .\make.ps1 serve       start the local web UI (http://127.0.0.1:8765)"
@@ -83,6 +87,8 @@ switch ($Target) {
     "format"     { Invoke-Format }
     "typecheck"  { Invoke-Typecheck }
     "check"      { Invoke-Check }
+    "demo"       { Invoke-Demo }
+    "models"     { Invoke-Models }
     "run"        { Invoke-Run }
     "serve"      { Invoke-Serve }
     "tree"       { Invoke-Tree }
