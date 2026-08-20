@@ -4,6 +4,8 @@ Cartograph is a code-intelligence MCP server, plus a small LangGraph
 migration pipeline that exists to prove the server's tools actually work
 against a real repo.
 
+> **Just want to run it?** [RUNME.md](RUNME.md) is the two-minute version.
+
 ## Quickstart
 
 Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
@@ -92,6 +94,7 @@ Reporter summarizes what happened.
 cartograph/
 ├── pyproject.toml
 ├── README.md
+├── RUNME.md                          # two-minute setup + guided tour
 ├── .env.example
 ├── src/
 │   └── cartograph/
