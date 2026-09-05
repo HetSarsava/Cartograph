@@ -2,6 +2,10 @@
 
 from pathlib import Path
 
+import tree_sitter
+
+from cartograph.graph import indexer as indexer_module
+from cartograph.graph.cache import load_cache
 from cartograph.graph.events import IndexEvent, IndexEventKind
 from cartograph.graph.indexer import index_repo
 from cartograph.graph.models import SymbolKind
@@ -332,3 +336,198 @@ def test_genuine_self_recursion_is_still_recorded(tmp_path):
 
     edge = next(e for e in graph.edges if e.target_name == "walk")
     assert edge.source_id == edge.target_id
+
+
+# --- persistent, content-addressed cache (Part A) -------------------------
+
+
+def _install_parse_spy(monkeypatch):
+    """Replace indexer's `Parser` with a counting wrapper.
+
+    Returns a zero-arg callable reporting how many `.parse()` calls the
+    indexer has made since the spy was installed. tree-sitter's `Parser`
+    cannot be subclassed, so the wrapper composes a real parser instead.
+    """
+    calls: list[bytes] = []
+
+    class _SpyParser:
+        def __init__(self, language):
+            self._parser = tree_sitter.Parser(language)
+
+        def parse(self, source, *args, **kwargs):
+            calls.append(source)
+            return self._parser.parse(source, *args, **kwargs)
+
+    monkeypatch.setattr(indexer_module, "Parser", _SpyParser)
+    return lambda: len(calls)
+
+
+def test_cache_second_run_reparses_nothing_and_returns_identical_graph(tmp_path, monkeypatch):
+    """A.6.1 — no changes between runs: zero re-parses, identical graph."""
+    (tmp_path / "a.py").write_text("def foo(x):\n    return x\n")
+    (tmp_path / "b.py").write_text("def bar():\n    return foo(1)\n")
+
+    graph1 = index_repo(tmp_path)
+    count = _install_parse_spy(monkeypatch)
+
+    graph2 = index_repo(tmp_path)
+
+    assert count() == 0, "unchanged files must not be re-parsed on a cache hit"
+    assert graph1 == graph2
+    cache_dir = tmp_path / ".cartograph" / "index_cache"
+    assert (cache_dir / "manifest.json").is_file()
+    assert load_cache(cache_dir) is not None
+
+
+def test_cache_reparses_only_the_changed_file(tmp_path, monkeypatch):
+    """A.6.2 — one changed file: only it is re-parsed; graph reflects it."""
+    (tmp_path / "a.py").write_text("def foo(x):\n    return x\n")
+    (tmp_path / "b.py").write_text("def bar():\n    return foo(1)\n")
+    graph1 = index_repo(tmp_path)
+
+    (tmp_path / "b.py").write_text("def bar():\n    return foo(1)\n\ndef extra():\n    return 0\n")
+    count = _install_parse_spy(monkeypatch)
+    events: list[IndexEvent] = []
+    graph2 = index_repo(tmp_path, on_event=events.append)
+
+    assert count() == 1, "only the modified file should be re-parsed"
+    assert [e.file_path for e in events if e.kind is IndexEventKind.FILE_CACHE_HIT] == ["a.py"]
+    assert [e.file_path for e in events if e.kind is IndexEventKind.FILE_CACHE_MISS] == ["b.py"]
+    qnames2 = {s.qualified_name for s in graph2.symbols.values()}
+    qnames1 = {s.qualified_name for s in graph1.symbols.values()}
+    assert "extra" in qnames2 and "extra" not in qnames1
+
+
+def test_cache_drops_symbols_and_edges_of_deleted_files(tmp_path):
+    """A.6.3 — a deleted file's symbols and edges vanish from the result."""
+    (tmp_path / "a.py").write_text("def foo(x):\n    return x\n")
+    (tmp_path / "b.py").write_text("def bar():\n    return foo(1)\n")
+    index_repo(tmp_path)
+
+    (tmp_path / "b.py").unlink()
+    graph2 = index_repo(tmp_path)
+
+    assert not any(s.file_path == "b.py" for s in graph2.symbols.values())
+    assert not any(e.source_id.startswith("b.py::") for e in graph2.edges)
+    assert any(s.qualified_name == "foo" for s in graph2.symbols.values())
+
+
+def test_cache_reresolves_edges_after_a_definition_is_deleted(tmp_path):
+    """A.6.4 — pass 2 re-runs in full even for cache-hit files.
+
+    `run`'s `foo()` is ambiguous (two `foo`s) on the first pass; deleting
+    the other `foo`'s file must resolve it on the second pass even though
+    the file containing `run` itself is a cache hit.
+    """
+    (tmp_path / "a.py").write_text("def foo():\n    pass\n")
+    (tmp_path / "b.py").write_text("def foo():\n    pass\n\ndef run():\n    return foo()\n")
+
+    graph1 = index_repo(tmp_path)
+    edge1 = next(e for e in graph1.edges if e.source_id.endswith("::run"))
+    assert edge1.target_id is None
+
+    (tmp_path / "a.py").unlink()
+    graph2 = index_repo(tmp_path)
+
+    edge2 = next(e for e in graph2.edges if e.source_id.endswith("::run"))
+    assert edge2.target_id is not None
+    assert graph2.symbols[edge2.target_id].qualified_name == "foo"
+
+
+def test_use_cache_false_bypasses_the_cache_entirely(tmp_path, monkeypatch):
+    """A.6.5 — use_cache=False re-parses everything despite a valid cache."""
+    (tmp_path / "a.py").write_text("def foo(x):\n    return x\n")
+    index_repo(tmp_path)
+
+    count = _install_parse_spy(monkeypatch)
+    graph = index_repo(tmp_path, use_cache=False)
+
+    assert count() == 1
+    assert any(s.qualified_name == "foo" for s in graph.symbols.values())
+
+
+def test_corrupt_cache_manifest_triggers_full_reindex(tmp_path, monkeypatch):
+    """A.6.6 — a corrupt manifest must not raise; full re-index and rewrite."""
+    (tmp_path / "a.py").write_text("def foo(x):\n    return x\n")
+    index_repo(tmp_path)
+
+    manifest_path = tmp_path / ".cartograph" / "index_cache" / "manifest.json"
+    manifest_path.write_text("this is not json {{{{{{")
+
+    count = _install_parse_spy(monkeypatch)
+    graph = index_repo(tmp_path)  # must not raise
+
+    assert count() == 1
+    assert any(s.qualified_name == "foo" for s in graph.symbols.values())
+    assert load_cache(tmp_path / ".cartograph" / "index_cache") is not None
+
+
+# --- type-aware call resolution (Part B) ----------------------------------
+
+
+def test_self_attr_call_resolves_to_inferred_class_method(tmp_path):
+    """B.5.1 — `self._store.get(k)` resolves to `Storage.get`, not any other `get`."""
+    (tmp_path / "m.py").write_text(
+        "class Storage:\n"
+        "    def get(self, key):\n"
+        "        return key\n"
+        "\n"
+        "class Other:\n"
+        "    def get(self, key):\n"
+        "        return key\n"
+        "\n"
+        "def get(key):\n"
+        "    return key\n"
+        "\n"
+        "class Cache:\n"
+        "    def __init__(self):\n"
+        "        self._store = Storage()\n"
+        "\n"
+        "    def read(self, key):\n"
+        "        return self._store.get(key)\n"
+    )
+
+    graph = index_repo(tmp_path)
+    by_qname = {s.qualified_name: s for s in graph.symbols.values()}
+    storage_get_id = by_qname["Storage.get"].id
+
+    edge = next(e for e in graph.edges if e.target_name == "self._store.get")
+    assert edge.target_id == storage_get_id
+    assert edge.target_id != by_qname["Other.get"].id
+
+
+def test_self_attr_call_on_inferred_dict_stays_unresolved(tmp_path):
+    """B.5.2 — `self._data = {}` makes `self._data.get(k)` a refused dict call."""
+    (tmp_path / "m.py").write_text(
+        "class Cache:\n"
+        "    def __init__(self):\n"
+        "        self._data = {}\n"
+        "\n"
+        "    def get(self, key):\n"
+        "        return self._data.get(key)\n"
+    )
+
+    graph = index_repo(tmp_path)
+
+    edge = next(e for e in graph.edges if e.target_name == "self._data.get")
+    assert edge.target_id is None, "must not resolve to Cache.get"
+
+
+def test_self_attr_call_with_unrecognized_rhs_stays_unresolved(tmp_path):
+    """B.5.3 — unrecognized RHS -> no inferred type -> no guess, still unresolved."""
+    (tmp_path / "m.py").write_text(
+        "def compute_default():\n"
+        "    return {}\n"
+        "\n"
+        "class Cache:\n"
+        "    def __init__(self):\n"
+        "        self._data = compute_default()\n"
+        "\n"
+        "    def get(self, key):\n"
+        "        return self._data.get(key)\n"
+    )
+
+    graph = index_repo(tmp_path)
+
+    edge = next(e for e in graph.edges if e.target_name == "self._data.get")
+    assert edge.target_id is None

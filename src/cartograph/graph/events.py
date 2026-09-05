@@ -22,6 +22,8 @@ class IndexEventKind(str, Enum):
     """What happened at a given point during `index_repo`."""
 
     FILE_STARTED = "file_started"
+    FILE_CACHE_HIT = "file_cache_hit"
+    FILE_CACHE_MISS = "file_cache_miss"
     SYMBOL_DISCOVERED = "symbol_discovered"
     FILE_FINISHED = "file_finished"
     EDGE_RESOLUTION_STARTED = "edge_resolution_started"

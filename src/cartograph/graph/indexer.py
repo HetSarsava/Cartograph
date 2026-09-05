@@ -1,8 +1,11 @@
 """Builds a `SymbolGraph` for a Python repo using tree-sitter.
 
-This is intentionally simple: each `.py` file is parsed independently (no
-incremental caching, no cross-run persistence), symbols are collected first,
-and call edges are resolved in a second pass against a global name index.
+This is intentionally simple: each `.py` file is parsed independently,
+symbols are collected first, and call edges are resolved in a second pass
+against a global name index. Unchanged files skip re-parsing between runs
+via a content-hash cache under `.cartograph/index_cache/` (see `cache.py`);
+only pass-1 output (symbols + pending calls) is cached — edge resolution
+always re-runs in full against the complete symbol set.
 Resolution is best-effort — see `_resolve_call_target` for the exact rules —
 and unresolved edges are kept (with `target_id=None`) rather than dropped, so
 downstream consumers can see what *couldn't* be figured out.
@@ -11,6 +14,7 @@ downstream consumers can see what *couldn't* be figured out.
 from __future__ import annotations
 
 import itertools
+import logging
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
@@ -19,8 +23,19 @@ from pathlib import Path
 import tree_sitter_python as tspython
 from tree_sitter import Language, Node, Parser
 
+from cartograph.graph.cache import (
+    _CACHE_VERSION,
+    CachedFileEntry,
+    CachedPendingCall,
+    CacheManifest,
+    hash_file_content,
+    load_cache,
+    save_cache,
+)
 from cartograph.graph.events import IndexEvent, IndexEventKind
 from cartograph.graph.models import Edge, EdgeKind, Symbol, SymbolGraph, SymbolKind
+
+logger = logging.getLogger(__name__)
 
 _PY_LANGUAGE = Language(tspython.language())
 
@@ -50,6 +65,13 @@ class _PendingCall:
     line: int
     self_class_id: str | None
     """Id of the class Symbol that 'self' refers to at the call site, if any."""
+    attr_types: dict[str, str] | None = None
+    """The self_class_id's attr_types dict (see _IndexAccumulator.attr_types),
+    captured at the time this call was recorded, so _resolve_call_target can
+    look up inferred attribute types without needing the full accumulator.
+    None if self_class_id is None (there is no 'self' context) or if the
+    class has no recorded attribute types.
+    """
 
 
 @dataclass
@@ -58,13 +80,29 @@ class _IndexAccumulator:
     pending_calls: list[_PendingCall] = field(default_factory=list)
     files_indexed: list[str] = field(default_factory=list)
     files_skipped: list[str] = field(default_factory=list)
+    attr_types: dict[str, dict[str, str]] = field(default_factory=dict)
+    """Maps class Symbol.id -> {attr_name: inferred_type}.
+
+    inferred_type is either another class Symbol.id (repo class), or one of
+    the reserved sentinel strings "dict" / "list". Populated by scanning
+    each class's __init__ method during the existing tree walk in
+    _walk_module; consumed by _resolve_call_target during pass 2.
+    """
+    init_nodes: dict[str, tuple[Node, bytes]] = field(default_factory=dict)
+    """Maps class Symbol.id -> (its __init__ function-definition Node, the
+    module's source bytes). Retained during the walk so the between-pass
+    attribute-type scan never re-locates the node in the tree.
+    """
 
 
 def index_repo(
     repo_path: str | Path,
     on_event: Callable[[IndexEvent], None] | None = None,
+    *,
+    use_cache: bool = True,
 ) -> SymbolGraph:
-    """Walk `repo_path`, parse every `.py` file, and build a `SymbolGraph`.
+    """Walk `repo_path` and build a `SymbolGraph`, reusing cached results for
+    unchanged `.py` files when possible.
 
     For each file: extract top-level and nested function/class definitions as
     `Symbol`s, and every call expression inside a function/method body as a
@@ -75,6 +113,14 @@ def index_repo(
     over-resolve (e.g. two unrelated functions sharing a name are ambiguous
     and left unresolved).
 
+    Between runs, pass-1 output (symbols and raw pending calls) is cached
+    under `{repo_path}/.cartograph/index_cache/`, keyed per file by a SHA-256
+    hash of its raw bytes; a file whose hash matches the cache is not
+    re-parsed. Pass 2 (edge resolution) always re-runs in full against the
+    current symbol set — cached resolved edges are never reused. If the cache
+    directory cannot be created (e.g. a read-only repo), indexing proceeds
+    exactly as before with caching disabled and a warning logged.
+
     Args:
         repo_path: Path to the root of the repo (or subtree) to index.
         on_event: Optional callback invoked with an `IndexEvent` at each
@@ -82,6 +128,9 @@ def index_repo(
             progress visualization or debugging. Purely an observability
             hook — indexing behavior and the returned `SymbolGraph` are
             identical whether or not this is passed.
+        use_cache: Keyword-only. When False, bypasses the on-disk cache
+            entirely (no read, no write) and re-parses every file, matching
+            the pre-cache behavior exactly.
 
     Returns:
         A `SymbolGraph` with all symbols and resolved/unresolved edges.
@@ -90,8 +139,30 @@ def index_repo(
     acc = _IndexAccumulator()
     seq = itertools.count()
 
+    cache_dir = root / ".cartograph" / "index_cache"
+    cache_enabled = False
+    manifest = None
+    if use_cache:
+        try:
+            cache_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            # Soft-fail: an unwritable cache dir must never break indexing.
+            logger.warning(
+                "[indexer] caching disabled: cannot create cache dir %s (%s)",
+                cache_dir,
+                exc,
+            )
+        else:
+            cache_enabled = True
+            manifest = load_cache(cache_dir)
+
     all_files = sorted(_iter_python_files(root))
     files_total = len(all_files)
+
+    # Per-file entries for the manifest written at the end of this run:
+    # cache-hit files carry their loaded entry over, freshly parsed files
+    # get a new one, and files deleted since the last run simply drop out.
+    fresh_entries: dict[str, CachedFileEntry] = {}
 
     for files_done, file_path in enumerate(all_files):
         rel_path = file_path.relative_to(root).as_posix()
@@ -108,14 +179,87 @@ def index_repo(
             )
 
         source = file_path.read_bytes()
-        parser = Parser(_PY_LANGUAGE)
-        tree = parser.parse(source)
-        if tree.root_node.has_error:
-            # Best-effort: a syntax error shouldn't take down the whole index.
-            acc.files_skipped.append(rel_path)
-        else:
-            _walk_module(tree.root_node, source, rel_path, acc, on_event, seq)
+        content_hash = hash_file_content(source)
+        cached_entry = manifest.files.get(rel_path) if manifest is not None else None
+
+        if cached_entry is not None and cached_entry.content_hash == content_hash:
+            # Cache hit: the content hash matches, so the symbols and pending
+            # calls from the previous run are still exactly right. Reuse them
+            # without touching tree-sitter; edges are still re-resolved in
+            # pass 2 below against the full current symbol set.
+            for symbol in cached_entry.symbols:
+                acc.symbols[symbol.id] = symbol
+            for cached_call in cached_entry.pending_calls:
+                acc.pending_calls.append(
+                    _PendingCall(
+                        source_id=cached_call.source_id,
+                        target_expr=cached_call.target_expr,
+                        line=cached_call.line,
+                        self_class_id=cached_call.self_class_id,
+                    )
+                )
             acc.files_indexed.append(rel_path)
+            fresh_entries[rel_path] = cached_entry
+            if on_event:
+                on_event(
+                    IndexEvent(
+                        kind=IndexEventKind.FILE_CACHE_HIT,
+                        seq=next(seq),
+                        timestamp=time.time(),
+                        file_path=rel_path,
+                        files_total=files_total,
+                        files_done=files_done,
+                    )
+                )
+                for symbol in cached_entry.symbols:
+                    on_event(
+                        IndexEvent(
+                            kind=IndexEventKind.SYMBOL_DISCOVERED,
+                            seq=next(seq),
+                            timestamp=time.time(),
+                            symbol=symbol,
+                            file_path=rel_path,
+                        )
+                    )
+        else:
+            if on_event:
+                on_event(
+                    IndexEvent(
+                        kind=IndexEventKind.FILE_CACHE_MISS,
+                        seq=next(seq),
+                        timestamp=time.time(),
+                        file_path=rel_path,
+                        files_total=files_total,
+                        files_done=files_done,
+                    )
+                )
+            parser = Parser(_PY_LANGUAGE)
+            tree = parser.parse(source)
+            if tree.root_node.has_error:
+                # Best-effort: a syntax error shouldn't take down the whole
+                # index. Skipped files are deliberately not cached: the
+                # manifest schema has no flag to record "this file failed to
+                # parse", so a cached skipped file would be indistinguishable
+                # from a valid empty module when deciding files_indexed vs
+                # files_skipped on a later run.
+                acc.files_skipped.append(rel_path)
+            else:
+                pending_start = len(acc.pending_calls)
+                _walk_module(tree.root_node, source, rel_path, acc, on_event, seq)
+                acc.files_indexed.append(rel_path)
+                fresh_entries[rel_path] = CachedFileEntry(
+                    content_hash=content_hash,
+                    symbols=[s for s in acc.symbols.values() if s.file_path == rel_path],
+                    pending_calls=[
+                        CachedPendingCall(
+                            source_id=pc.source_id,
+                            target_expr=pc.target_expr,
+                            line=pc.line,
+                            self_class_id=pc.self_class_id,
+                        )
+                        for pc in acc.pending_calls[pending_start:]
+                    ],
+                )
 
         if on_event:
             on_event(
@@ -140,6 +284,10 @@ def index_repo(
                 files_done=len(acc.files_indexed),
             )
         )
+
+    # Pass 1.5: infer `self.<attr>` types from each class's `__init__` and
+    # attach them to the pending calls, before edge resolution consumes them.
+    _populate_attr_types(acc)
 
     by_bare_name = _build_bare_name_index(acc.symbols)
     edges: list[Edge] = []
@@ -167,6 +315,9 @@ def index_repo(
                 files_done=files_done_total,
             )
         )
+
+    if cache_enabled:
+        save_cache(cache_dir, CacheManifest(cache_version=_CACHE_VERSION, files=fresh_entries))
 
     return SymbolGraph(
         root_path=str(root),
@@ -302,6 +453,12 @@ def _walk_module(
         )
         acc.symbols[symbol_id] = symbol
         _emit_symbol_discovered(symbol)
+        # Retain the class's `__init__` node for the between-pass attribute
+        # type scan; re-locating it later would mean searching a tree we no
+        # longer hold (and, on a cache-hit run, never parsed at all).
+        init_node = _find_init_method(node, source)
+        if init_node is not None:
+            acc.init_nodes[symbol_id] = (init_node, source)
         if body is not None:
             visit(body, [*name_stack, class_name], symbol_id, self_class_id, current_symbol_id)
 
@@ -376,6 +533,146 @@ def _build_bare_name_index(symbols: dict[str, Symbol]) -> dict[str, list[str]]:
     return index
 
 
+def _find_init_method(class_node: Node, source: bytes) -> Node | None:
+    """Return the class body's direct `__init__` function-definition node, if any.
+
+    Only direct children of the class body count — an `__init__` nested
+    inside another method or a conditional block is not the class's
+    initializer.
+
+    Args:
+        class_node: The `class_definition` node.
+        source: The module's raw bytes, for reading node text.
+
+    Returns:
+        The `function_definition` node named `__init__`, or None.
+    """
+    body = class_node.child_by_field_name("body")
+    if body is None:
+        return None
+    for child in body.children:
+        if child.type == "function_definition":
+            name_node = child.child_by_field_name("name")
+            if name_node is not None and _text(name_node, source) == "__init__":
+                return child
+    return None
+
+
+def _build_known_classes(symbols: dict[str, Symbol]) -> dict[str, str]:
+    """Map a bare class name to its Symbol.id, for `self.<attr> = SomeClass()`.
+
+    Built once from the complete symbol set after pass 1 (mirroring how
+    `_build_bare_name_index` is built), so an `__init__` in one file can
+    construct a class defined in a file walked later. If two classes share a
+    bare name the entry is dropped: the constructor call is then ambiguous,
+    and this scan refuses to guess rather than pick one at random.
+    """
+    known: dict[str, str] = {}
+    for symbol_id, symbol in symbols.items():
+        if symbol.kind is not SymbolKind.CLASS:
+            continue
+        bare = symbol.qualified_name.split(".")[-1]
+        if bare in known and known[bare] != symbol_id:
+            del known[bare]
+        else:
+            known[bare] = symbol_id
+    return known
+
+
+def _scan_init_attr_types(
+    class_node: Node,
+    class_symbol_id: str,
+    source: bytes,
+    known_classes: dict[str, str],
+) -> dict[str, str]:
+    """Infer `self.<attr>` types from the `__init__` body's direct assignments.
+
+    Only statements of the exact form `self.<attr> = <expr>` count, and only
+    for three shapes of `<expr>`: a call to a known repo class's constructor,
+    a dict literal / `dict(...)`, or a list literal / `list(...)`. Anything
+    else leaves the attribute's type unknown — no guessing from type
+    annotations, conditional expressions, or unrecognized calls.
+
+    Args:
+        class_node: The `__init__` function-definition node, retained during
+            the module walk so this scan never re-locates it in the tree.
+        class_symbol_id: Id of the enclosing class Symbol. Unused by the scan
+            itself (the caller keys the result by it) — present because the
+            retained node alone cannot identify the class.
+        source: The module's raw bytes, for reading node text.
+        known_classes: Bare class name -> Symbol.id, across the whole repo.
+
+    Returns:
+        Map of attr_name -> inferred type ("dict" / "list" sentinels, or a
+        class Symbol.id). Empty when nothing recognizable is assigned.
+    """
+    attr_types: dict[str, str] = {}
+    body = class_node.child_by_field_name("body")
+    if body is None:
+        return attr_types
+    for statement in body.children:
+        # Assignments are wrapped in `expression_statement` nodes.
+        if statement.type == "expression_statement" and statement.children:
+            statement = statement.children[0]
+        if statement.type != "assignment":
+            continue
+        left = statement.child_by_field_name("left")
+        right = statement.child_by_field_name("right")
+        if left is None or right is None or left.type != "attribute":
+            continue
+        object_node = left.child_by_field_name("object")
+        attr_node = left.child_by_field_name("attribute")
+        if object_node is None or attr_node is None or _text(object_node, source) != "self":
+            continue
+        inferred = _infer_rhs_type(right, source, known_classes)
+        if inferred is not None:
+            attr_types[_text(attr_node, source)] = inferred
+    return attr_types
+
+
+def _infer_rhs_type(right: Node, source: bytes, known_classes: dict[str, str]) -> str | None:
+    """Return the inferred type sentinel for an assignment RHS, or None.
+
+    Recognizes exactly: a call to a known repo class's constructor, a dict
+    literal or `dict(...)` call ("dict"), and a list literal or `list(...)`
+    call ("list"). Every other shape is unrecognized and yields None.
+    """
+    if right.type == "dictionary":
+        return "dict"
+    if right.type == "list":
+        return "list"
+    if right.type == "call":
+        function_node = right.child_by_field_name("function")
+        if function_node is not None and function_node.type == "identifier":
+            name = _text(function_node, source)
+            if name in known_classes:
+                return known_classes[name]
+            if name == "dict":
+                return "dict"
+            if name == "list":
+                return "list"
+    return None
+
+
+def _populate_attr_types(acc: _IndexAccumulator) -> None:
+    """Run the between-pass attribute-type scan and attach results to calls.
+
+    Runs after every file has been walked (so `known_classes` covers the
+    whole repo) and before pass 2. `attr_types` is deliberately not cached:
+    like every other pass-2 input it is recomputed fresh on every
+    `index_repo` call, from the `__init__` nodes of the files parsed this
+    run.
+    """
+    known_classes = _build_known_classes(acc.symbols)
+    for class_id, (init_node, source) in acc.init_nodes.items():
+        scanned = _scan_init_attr_types(init_node, class_id, source, known_classes)
+        if scanned:
+            acc.attr_types[class_id] = scanned
+    for call in acc.pending_calls:
+        if call.self_class_id is not None:
+            call.attr_types = acc.attr_types.get(call.self_class_id)
+
+
 def _resolve_call_target(
     call: _PendingCall,
     symbols: dict[str, Symbol],
@@ -386,10 +683,13 @@ def _resolve_call_target(
     Resolution order:
       1. `self.<name>` inside a class: look for a method named `<name>` whose
          `parent_id` is the enclosing class. Unambiguous by construction --
-         but only for a *single* attribute hop. `self.<attr>.<name>()` is a
-         call on whatever `self.<attr>` holds, whose type is unknown, so it
-         does not qualify: `self._jobs.get(k)` is a dict lookup, not the
-         enclosing class's own `get` method.
+         and, one attribute hop deeper, so is `self.<attr>.<name>()` when
+         `self.<attr>`'s type is *inferred* from a traceable `__init__`
+         assignment (`self._store = Storage()`, a dict literal, or a list
+         literal): the method is looked up on that specific class. A receiver
+         inferred to be a dict or list (e.g. `self._jobs.get(k)` on
+         `self._jobs = {}`) is refused outright rather than guessed at;
+         a receiver with no inferred type is not a `self.<name>` call.
       2. Otherwise, treat the last dotted component as a bare name and look
          it up in `by_bare_name`. Resolve only if exactly one symbol matches;
          ambiguous or unknown names are left unresolved.
@@ -427,6 +727,44 @@ def _resolve_call_target(
                     kind=EdgeKind.CALLS,
                     line=call.line,
                 )
+
+    # `self.<attr>.<name>()` with an inferred attribute type (tier 1.5). The
+    # receiver's type comes from a traceable `__init__` assignment
+    # (`self._store = Storage()` / `= {}` / `= []`), so a method lookup
+    # against that specific class is as safe as tier 1 -- no bare-name guess.
+    if (
+        call.target_expr.startswith("self.")
+        and call.target_expr.count(".") == 2
+        and call.self_class_id is not None
+        and call.attr_types is not None
+    ):
+        _, attr_name, method_name = call.target_expr.split(".")
+        inferred_type = call.attr_types.get(attr_name)
+        if inferred_type == "dict" or inferred_type == "list":
+            # Positive knowledge that the receiver is a container: refusing
+            # to bind `d.get(...)` to some class's `get` method is now a
+            # fact, not a guess.
+            return Edge(
+                source_id=call.source_id,
+                target_id=None,
+                target_name=call.target_expr,
+                kind=EdgeKind.CALLS,
+                line=call.line,
+            )
+        if inferred_type is not None:
+            for symbol_id, symbol in symbols.items():
+                if symbol.parent_id == inferred_type and symbol.qualified_name.endswith(
+                    f".{method_name}"
+                ):
+                    return Edge(
+                        source_id=call.source_id,
+                        target_id=symbol_id,
+                        target_name=call.target_expr,
+                        kind=EdgeKind.CALLS,
+                        line=call.line,
+                    )
+            # Method not found on the inferred class (e.g. inherited — out of
+            # scope for this inference): fall through to the tiers below.
 
     candidates = by_bare_name.get(bare_name, [])
     target_id = candidates[0] if len(candidates) == 1 else None
