@@ -21,8 +21,7 @@ class Settings(BaseSettings):
 
     groq_api_key: str | None = Field(
         default=None,
-        description="Groq API key. Required to actually call the LLM; tools and "
-        "stubbed agents work without it.",
+        description="Groq API key. Required to actually call the LLM; deterministic tools work without it.",
     )
     groq_model: str = Field(
         default="openai/gpt-oss-120b",
@@ -33,24 +32,13 @@ class Settings(BaseSettings):
         default=25,
         ge=1,
         validation_alias="CARTOGRAPH_MAX_LLM_CALLS_PER_RUN",
-        description="Soft ceiling on LLM calls per pipeline run.",
-    )
-    max_llm_calls_per_step: int = Field(
-        default=4,
-        ge=1,
-        validation_alias="CARTOGRAPH_MAX_LLM_CALLS_PER_STEP",
-        description=(
-            "Hard ceiling on LLM calls (Rewriter diagnosis + Adjudicator) for a single "
-            "plan step. Independent safety net: if a routing bug ever lets a step loop, "
-            "this forces it to finish (quarantined) instead of looping until a "
-            "provider-side quota does."
-        ),
+        description="Reserved advisory setting; not currently enforced.",
     )
     max_context_tokens: int = Field(
         default=8000,
         gt=0,
         validation_alias="CARTOGRAPH_MAX_CONTEXT_TOKENS",
-        description="Soft ceiling on tokens packed into a single context window.",
+        description="Reserved for the deferred context packer; not currently enforced.",
     )
     test_timeout_seconds: int = Field(
         default=120,

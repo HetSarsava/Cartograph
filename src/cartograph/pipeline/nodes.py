@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 
-from cartograph.agents.adjudicator import AdjudicationDecision, AdjudicatorRequest, run_adjudicator
+from cartograph.agents.adjudicator import AdjudicatorRequest, run_adjudicator
 from cartograph.agents.planner import PlannerRequest, run_planner
 from cartograph.agents.reporter import ReporterRequest, run_reporter
 from cartograph.agents.rewriter import RewriterRequest, run_rewriter
@@ -24,6 +24,7 @@ from cartograph.graph.queries import blast_radius
 from cartograph.pipeline.state import RunState
 from cartograph.providers.base import Provider
 from cartograph.providers.groq_provider import GroqProvider
+from cartograph.tools.test_runner import run_tests
 
 logger = logging.getLogger(__name__)
 
@@ -105,11 +106,8 @@ def planner_node(state: RunState) -> dict:
         "plan_steps_remaining": list(result.steps),
         "plan_steps_done": [],
         "current_step": None,
-        "retried_once": False,
         "committed_symbol_ids": [],
         "quarantined_symbol_ids": [],
-        "adjudicated_this_step": False,
-        "llm_calls_this_step": 0,
     }
 
 
@@ -117,8 +115,7 @@ def rewrite_step_node(state: RunState) -> dict:
     """Attempt the current plan step, pulling the next one if none is in progress.
 
     Does not advance `plan_steps_done` — that happens in `finish_step_node`,
-    once `_route_after_rewrite` decides the step is done (success, or failed
-    even after its one retry).
+    after the single deterministic attempt and optional ambiguity review.
     """
     thread_id = state.get("thread_id", "?")
     logger.info("[orchestrator] thread=%s enter rewrite_step", thread_id)
@@ -131,20 +128,6 @@ def rewrite_step_node(state: RunState) -> dict:
             return {}
         current_step = remaining.pop(0)
 
-    if state.get("adjudicated_this_step"):
-        # This step's ambiguity has already been through Adjudicator with a
-        # decision (SKIP/ESCALATE_TO_HUMAN) that gives us nothing new to try —
-        # apply_codemod is deterministic, so calling it again against
-        # unchanged source would just re-detect the identical ambiguity and
-        # loop with `adjudicate` forever. Cheaper line of defense than
-        # relying on _route_after_rewrite alone: skip the tool/LLM call.
-        logger.info(
-            "[orchestrator] target=%s already adjudicated this step; skipping redundant "
-            "apply_codemod call, leaving it for finish_step to quarantine",
-            current_step.symbol_id,
-        )
-        return {"current_step": current_step, "plan_steps_remaining": remaining}
-
     logger.info("[orchestrator] rewrite_step target=%s", current_step.symbol_id)
 
     request = RewriterRequest(
@@ -153,32 +136,20 @@ def rewrite_step_node(state: RunState) -> dict:
         repo_path=state["repo_path"],
     )
     result = run_rewriter(_build_provider(), request)
-    llm_calls_this_step = state.get("llm_calls_this_step", 0) + 1
 
     logger.info(
-        "[orchestrator] thread=%s exit rewrite_step target=%s success=%s ambiguities=%d "
-        "llm_calls_this_step=%d",
+        "[orchestrator] thread=%s exit rewrite_step target=%s success=%s ambiguities=%d",
         thread_id,
         current_step.symbol_id,
         result.success,
         len(result.ambiguities),
-        llm_calls_this_step,
     )
     return {
         "current_step": current_step,
         "plan_steps_remaining": remaining,
         "rewriter_result": result,
         "pending_ambiguities": result.ambiguities,
-        "llm_calls_this_step": llm_calls_this_step,
     }
-
-
-def retry_flag_node(state: RunState) -> dict:
-    """Mark the current step as retried, so it isn't retried a second time."""
-    current_step = state.get("current_step")
-    symbol_id = current_step.symbol_id if current_step else "?"
-    logger.info("[orchestrator] retrying target=%s (1 retry allowed)", symbol_id)
-    return {"retried_once": True}
 
 
 def finish_step_node(state: RunState) -> dict:
@@ -205,11 +176,10 @@ def finish_step_node(state: RunState) -> dict:
     return {
         "plan_steps_done": done,
         "current_step": None,
-        "retried_once": False,
         "committed_symbol_ids": committed,
         "quarantined_symbol_ids": quarantined,
-        "adjudicated_this_step": False,
-        "llm_calls_this_step": 0,
+        "rewriter_result": None,
+        "pending_ambiguities": [],
     }
 
 
@@ -225,29 +195,38 @@ def adjudicate_node(state: RunState) -> dict:
 
     request = AdjudicatorRequest(ambiguity=ambiguities[0], surrounding_context="")
     result = run_adjudicator(_build_provider(), request)
-    llm_calls_this_step = state.get("llm_calls_this_step", 0) + 1
 
-    # Only APPLY_CANDIDATE gives rewrite_step something new to try (a real
-    # candidate edit); SKIP/ESCALATE_TO_HUMAN resolve this step's ambiguity
-    # with no new action, so retrying apply_codemod would just re-detect the
-    # same ambiguity and loop forever — mark it settled instead.
-    adjudicated_this_step = result.decision != AdjudicationDecision.APPLY_CANDIDATE
-
-    logger.info(
-        "[orchestrator] thread=%s exit adjudicate decision=%s remaining_ambiguities=%d "
-        "adjudicated_this_step=%s llm_calls_this_step=%d",
-        thread_id,
-        result.decision,
-        len(ambiguities) - 1,
-        adjudicated_this_step,
-        llm_calls_this_step,
-    )
+    # Candidate recommendations are advisory: this implementation only executes
+    # registered deterministic recipes. Never replay an unchanged ambiguous edit.
+    logger.info("[orchestrator] adjudication=%s; target remains quarantined", result.decision)
     return {
         "adjudication_result": result,
         "pending_ambiguities": ambiguities[1:],
-        "adjudicated_this_step": adjudicated_this_step,
-        "llm_calls_this_step": llm_calls_this_step,
     }
+
+
+def inspect_node(state: RunState) -> dict:
+    """Index once, then let Scout select relevant symbols."""
+    indexed = index_repo_node(state)
+    return {**indexed, **scout_node({**state, **indexed})}
+
+
+def execute_plan_node(state: RunState) -> dict:
+    """Attempt each planned step once; review ambiguity, then record its outcome.
+
+    Rewriter already snapshots, tests and restores failures. Retrying the same
+    deterministic recipe cannot repair it. Adjudicator gives advice only.
+    """
+    working = dict(state)
+    for _step in list(state.get("plan_steps_remaining", [])):
+        working.update(rewrite_step_node(working))
+        if working.get("pending_ambiguities"):
+            working.update(adjudicate_node(working))
+        working.update(finish_step_node(working))
+    working["final_tests"] = run_tests(
+        state["repo_path"], timeout_seconds=get_settings().test_timeout_seconds
+    )
+    return working
 
 
 def reporter_node(state: RunState) -> dict:
@@ -275,13 +254,7 @@ def reporter_node(state: RunState) -> dict:
     request = ReporterRequest(
         task_description=state["task_description"],
         step_summaries=step_summaries,
-        # Whether the repo is green at the end -- NOT whether every target
-        # was migrated. A committed step passed its test gate; a quarantined
-        # step was never written to disk. So the tree is healthy unless a
-        # step ended in neither bucket, meaning the run stopped midway.
-        # (This previously read only the *last* step's rewriter_result, so a
-        # single trailing quarantined step reported a clean run as failed.)
-        tests_passed=all(s.symbol_id in committed | quarantined for s in done_steps),
+        tests_passed=bool(state.get("final_tests") and state["final_tests"].all_passed),
         notes=[
             f"{len(committed)} target(s) committed, {len(quarantined)} quarantined.",
             "Quarantined targets were left byte-for-byte unchanged on disk.",

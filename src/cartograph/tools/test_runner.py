@@ -64,7 +64,10 @@ class TestRunResult(BaseModel):
     @property
     def all_passed(self) -> bool:
         """True if at least one test ran and none failed or errored."""
-        return self.collection_error is None and self.total > 0 and self.failed == 0 and self.errors == 0
+        return (
+            self.return_code == 0 and self.collection_error is None
+            and self.passed > 0 and self.failed == 0 and self.errors == 0
+        )
 
 
 def run_tests(

@@ -13,7 +13,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import click
-from langchain_core.runnables import RunnableConfig
 
 from cartograph.config import get_settings
 from cartograph.graph.event_sink import JsonlEventSink
@@ -83,11 +82,10 @@ def run(repo_path: str, task: str, thread_id: str | None, log_level: str) -> Non
         "task_description": task,
         "thread_id": resolved_thread_id,
     }
-    config: RunnableConfig = {"configurable": {"thread_id": resolved_thread_id}}
 
     start = time.monotonic()
     try:
-        final_state = graph.invoke(initial_state, config=config)
+        final_state = graph.invoke(initial_state)
     except Exception as exc:
         # A provider failure is nearly always a wrong model id, a bad key, or a
         # spent quota. Say which, in one line -- a traceback adds nothing and

@@ -1,10 +1,12 @@
 # Cartograph
 
 Cartograph is a code-intelligence MCP server, plus a small LangGraph
-migration pipeline that exists to prove the server's tools actually work
-against a real repo.
+migration pipeline that uses the same deterministic Python tools against a real repo.
+The pipeline calls them directly; a separate client demo verifies the MCP protocol.
 
 > **Just want to run it?** [RUNME.md](RUNME.md) is the two-minute version.
+> **Learning MCP?** [The practical guide](docs/mcp-guide.md) explains JSON-RPC,
+> client setup and the minimal LangGraph workflow.
 
 ## Quickstart
 
@@ -57,9 +59,10 @@ unchanged for a human — rather than guessed at. The bundled example converts
 `unittest` assertions to plain `pytest` asserts.
 
 **4. Give a coding agent better tools.**
-`cartograph` is an MCP server first. `uv run python -m
-cartograph.mcp_server.server` exposes indexing, the graph queries, codemods,
-git snapshot/rollback, and a structured pytest wrapper to any MCP client.
+`cartograph` is an MCP server first. `uv run cartograph-mcp --repo /path/to/repo` exposes indexing, the graph queries, codemods,
+git snapshot/rollback, and a structured pytest wrapper to compatible local stdio MCP clients.
+Tests and mutations require the startup flag `--allow-execution`. There are eight
+working tools; query results are paginated and the graph stays on the server.
 
 ## The problem
 
@@ -145,8 +148,9 @@ cartograph/
 ## Status
 
 The pipeline runs end to end for real: it indexes a repo, plans a migration,
-applies libcst codemods, verifies with pytest, and reports — calling Groq at
-each agent step.
+applies libcst codemods, verifies with pytest, and reports. Groq handles
+selection, planning and reporting, plus optional ambiguity advice/failure diagnosis.
+Offline tests mock model responses; the live-provider test requires a Groq key.
 
 **Implemented (real logic, covered by passing tests):**
 
@@ -167,18 +171,19 @@ each agent step.
   rather than guessing. Targets resolving outside the repo root are refused.
 - `agents/` — Scout, Planner, Rewriter, Adjudicator, Reporter, all calling
   Groq through `Provider` and validating responses into Pydantic models
-- `mcp_server/server.py` — all of the above registered as MCP tools via the
-  official `mcp` SDK
-- `pipeline/` — a compiled `StateGraph` with the ambiguity and retry-once
-  branches wired up, plus a per-step LLM-call budget so an unresolvable
-  ambiguity can't loop
+- `mcp_server/server.py` — eight working tools registered via the official
+  MCP SDK; actual subprocess and raw JSON-RPC interoperability tests
+- `pipeline/` — four sequential stages: inspect, plan, execute, report.
+  Five roles remain; execution uses an ordinary Python loop with one attempt
+  per step and advisory ambiguity review. No checkpoint or graph retry cycle.
 - `webui/` — a stdlib-only local UI: index a repo from the browser and
   watch a migration run live (`cartograph serve`)
 
 **Still stubbed:**
 
 - `tools/context_packer.py` — `pack_context()`: the degradation-stage
-  concept is documented, the loop raises `NotImplementedError`
+  concept is documented, the loop raises `NotImplementedError`. It is not
+  registered as an MCP tool or used by the pipeline.
 
 ## Setup notes
 
@@ -253,3 +258,18 @@ It binds to `127.0.0.1` only. It runs the indexer against whatever local
 path you hand it, so it is not safe to expose on a network. It deliberately
 won't rewrite an arbitrary directory — that stays a `cartograph run` decision
 you make in a terminal.
+
+## Reproducible MCP verification and context measurement
+
+```bash
+uv sync --frozen --extra dev
+uv run python examples/mcp_client.py tests/fixtures/sample_repo --name add
+uv run pytest -q
+uv run python scripts/benchmark_context.py --repo src/cartograph
+```
+
+The benchmark measures UTF-8 source bytes versus complete impact-query request
+and SDK-result bytes. It includes pagination and both result representations,
+but excludes discovery, tool schemas and initial symbol lookup. Results vary
+by query; they are not a universal 100x token-saving claim.
+See [architecture and limitations](docs/architecture.md).

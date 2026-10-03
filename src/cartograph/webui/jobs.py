@@ -163,8 +163,6 @@ def run_migration_demo(job: Job, lock: threading.Lock, logs_dir: Path) -> dict[s
     """
     import difflib
 
-    from langchain_core.runnables import RunnableConfig
-
     from cartograph.pipeline.graph import build_graph
     from cartograph.pipeline.state import RunState
     from cartograph.providers.groq_provider import call_stats
@@ -190,10 +188,9 @@ def run_migration_demo(job: Job, lock: threading.Lock, logs_dir: Path) -> dict[s
         "task_description": task,
         "thread_id": f"webui-{job.id}",
     }
-    config: RunnableConfig = {"configurable": {"thread_id": f"webui-{job.id}"}}
 
     start = time.monotonic()
-    final_state = build_graph().invoke(initial, config=config)
+    final_state = build_graph().invoke(initial)
     duration = time.monotonic() - start
 
     after = demo_file.read_text(encoding="utf-8")

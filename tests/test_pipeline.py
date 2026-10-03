@@ -1,21 +1,4 @@
-"""Tests that the LangGraph StateGraph itself compiles and runs end-to-end.
-
-`test_build_graph_compiles` and the `_route_after_rewrite` unit tests are
-pure structural/routing checks (no network, no mocking needed for the
-routing tests). `test_pipeline_quarantines_ambiguous_step_without_looping`
-is a regression test for a real bug: after Adjudicator escalates an
-ambiguity, nothing stopped `rewrite_step` from re-running the (deterministic)
-codemod, re-detecting the identical ambiguity, and routing back to
-`adjudicate` forever — see `_route_after_rewrite` and `adjudicate_node` for
-the fix. It mocks Scout/Planner/Adjudicator/Reporter (all real LLM calls)
-but lets the real `run_rewriter` execute against the real ambiguous fixture,
-since that path never calls an LLM — the ambiguity is detected by the
-deterministic `apply_codemod` alone. This keeps the regression test fast,
-deterministic, and network-free while still exercising the real routing fix.
-
-`test_pipeline_runs_end_to_end_with_real_agents` makes real Groq API calls
-and is skipped when `GROQ_API_KEY` isn't set (e.g. CI without secrets).
-"""
+"""Behavior tests for the four-stage pipeline; LLM responses are mocked unless marked live."""
 
 import shutil
 from pathlib import Path
@@ -24,14 +7,13 @@ from unittest.mock import patch
 import pytest
 
 from cartograph.agents.adjudicator import AdjudicationDecision, AdjudicatorResponse
-from cartograph.agents.planner import PlanStep, PlannerResponse
+from cartograph.agents.planner import PlannerResponse, PlanStep
 from cartograph.agents.reporter import ReporterResponse
 from cartograph.agents.rewriter import run_rewriter as real_run_rewriter
 from cartograph.agents.scout import ScoutResponse
 from cartograph.config import get_settings
-from cartograph.pipeline.graph import _route_after_rewrite, build_graph
+from cartograph.pipeline.graph import build_graph
 from cartograph.pipeline.state import RunState
-from cartograph.tools.codemod import CodemodAmbiguity
 
 FIXTURE_REPO = Path(__file__).parent / "fixtures" / "sample_repo"
 
@@ -62,59 +44,11 @@ def test_build_graph_compiles():
     assert graph is not None
 
 
-# --- _route_after_rewrite: routing unit tests (the crux of the bug) -----
-
-
-def _make_step() -> PlanStep:
-    return PlanStep(symbol_id="a.py::Foo.test_x", action="convert", recipe_name="unittest_to_pytest")
-
-
-def test_route_after_rewrite_stops_looping_once_adjudicated():
-    """Once a step has been adjudicated, routing must go straight to
-    finish_step even though pending_ambiguities is (again) non-empty —
-    the exact condition that caused the infinite adjudicate<->rewrite_step
-    loop."""
-    state: RunState = {
-        "current_step": _make_step(),
-        "adjudicated_this_step": True,
-        "pending_ambiguities": [CodemodAmbiguity(file_path="a.py", line=1, description="still ambiguous")],
-        "rewriter_result": None,
-        "retried_once": False,
-        "llm_calls_this_step": 1,
-    }
-    assert _route_after_rewrite(state) == "finish_step"
-
-
-def test_route_after_rewrite_still_routes_a_new_ambiguity_to_adjudicate():
-    state: RunState = {
-        "current_step": _make_step(),
-        "adjudicated_this_step": False,
-        "pending_ambiguities": [CodemodAmbiguity(file_path="a.py", line=1, description="ambiguous")],
-        "rewriter_result": None,
-        "retried_once": False,
-        "llm_calls_this_step": 0,
-    }
-    assert _route_after_rewrite(state) == "adjudicate"
-
-
-def test_route_after_rewrite_budget_exceeded_forces_finish_step():
-    """Independent safety net: even with a fresh, unadjudicated ambiguity,
-    exceeding the per-step call budget forces finish_step regardless."""
-    state: RunState = {
-        "current_step": _make_step(),
-        "adjudicated_this_step": False,
-        "pending_ambiguities": [CodemodAmbiguity(file_path="a.py", line=1, description="ambiguous")],
-        "rewriter_result": None,
-        "retried_once": False,
-        "llm_calls_this_step": get_settings().max_llm_calls_per_step,
-    }
-    assert _route_after_rewrite(state) == "finish_step"
-
-
 # --- end-to-end regression test, mocked LLM-backed agents ---------------
 
 
-def test_pipeline_quarantines_ambiguous_step_without_looping(sample_repo):
+@pytest.mark.parametrize("decision", list(AdjudicationDecision))
+def test_pipeline_quarantines_ambiguous_step_without_looping(sample_repo, decision):
     mock_scout = ScoutResponse(relevant_symbol_ids=[AMBIGUOUS_SYMBOL_ID], reasoning="mock")
     mock_planner = PlannerResponse(
         steps=[
@@ -127,7 +61,7 @@ def test_pipeline_quarantines_ambiguous_step_without_looping(sample_repo):
         summary="mock",
     )
     mock_adjudication = AdjudicatorResponse(
-        decision=AdjudicationDecision.ESCALATE_TO_HUMAN,
+        decision=decision,
         chosen_candidate=None,
         reasoning="mock escalation",
     )
@@ -150,8 +84,7 @@ def test_pipeline_quarantines_ambiguous_step_without_looping(sample_repo):
             "task_description": "convert unittest-style assertions to plain pytest asserts",
             "thread_id": "test-ambiguity-loop",
         }
-        config = {"configurable": {"thread_id": "test-ambiguity-loop"}}
-        final_state = graph.invoke(initial_state, config=config)
+        final_state = graph.invoke(initial_state)
 
     # Reached the end — didn't loop.
     assert final_state["reporter_result"] is not None
@@ -177,9 +110,8 @@ def test_pipeline_runs_end_to_end_with_real_agents(sample_repo):
         "task_description": "demo task for the scaffolded pipeline",
         "thread_id": "test-thread",
     }
-    config = {"configurable": {"thread_id": "test-thread"}}
 
-    final_state = graph.invoke(initial_state, config=config)
+    final_state = graph.invoke(initial_state)
 
     assert final_state["symbol_graph"] is not None
     assert final_state["scout_result"] is not None
@@ -191,3 +123,77 @@ def test_pipeline_runs_end_to_end_with_real_agents(sample_repo):
     assert len(final_state.get("committed_symbol_ids", [])) + len(
         final_state.get("quarantined_symbol_ids", [])
     ) == total_steps
+
+
+@pytest.mark.parametrize("count", [0, 40])
+def test_empty_and_long_plans_need_no_graph_loop(sample_repo, count):
+    from cartograph.agents.rewriter import RewriterResponse
+    steps = [PlanStep(symbol_id=f"a.py::f{i}", action="review") for i in range(count)]
+    with (
+        patch("cartograph.pipeline.nodes.run_scout",
+              return_value=ScoutResponse(relevant_symbol_ids=[], reasoning="test")),
+        patch("cartograph.pipeline.nodes.run_planner",
+              return_value=PlannerResponse(steps=steps, summary="test")),
+        patch("cartograph.pipeline.nodes.run_rewriter",
+              return_value=RewriterResponse(success=False, final_summary="no recipe")) as rewrite,
+        patch("cartograph.pipeline.nodes.run_reporter",
+              return_value=ReporterResponse(report_markdown="test")),
+    ):
+        result = build_graph().invoke({"repo_path": str(sample_repo), "task_description": "test"})
+    assert rewrite.call_count == count
+    assert len(result["quarantined_symbol_ids"]) == count
+    assert result["reporter_result"] is not None
+
+
+def test_successful_step_rewrites_and_tests(sample_repo):
+    symbol_id = "tests/test_legacy_unittest.py::ArithmeticTests.test_add"
+    with (
+        patch("cartograph.pipeline.nodes.run_scout",
+              return_value=ScoutResponse(relevant_symbol_ids=[symbol_id], reasoning="test")),
+        patch("cartograph.pipeline.nodes.run_planner", return_value=PlannerResponse(
+            steps=[PlanStep(symbol_id=symbol_id, action="convert",
+                            recipe_name="unittest_to_pytest")], summary="test")),
+        patch("cartograph.pipeline.nodes.run_adjudicator") as adjudicate,
+        patch("cartograph.pipeline.nodes.run_reporter",
+              return_value=ReporterResponse(report_markdown="test")),
+    ):
+        result = build_graph().invoke({"repo_path": str(sample_repo), "task_description": "convert"})
+    assert symbol_id in result["committed_symbol_ids"]
+    assert not result["quarantined_symbol_ids"]
+    adjudicate.assert_not_called()
+    text = (sample_repo / "tests" / "test_legacy_unittest.py").read_text()
+    assert "self.assertEqual" not in text
+
+
+@pytest.mark.parametrize("failure", ["diagnosis", "test_runner", "codemod"])
+def test_rewriter_restores_even_when_a_dependency_raises(tmp_path, failure):
+    from unittest.mock import Mock
+
+    from cartograph.agents.rewriter import RewriterRequest
+    from cartograph.providers.base import ProviderError
+    from cartograph.tools.test_runner import TestRunResult
+
+    target = tmp_path / "test_a.py"
+    original = "import unittest\nclass T(unittest.TestCase):\n    def test_a(self):\n        self.assertEqual(1, 2)\n"
+    target.write_text(original)
+    request = RewriterRequest(repo_path=str(tmp_path), task_description="convert",
+        plan_step=PlanStep(symbol_id="test_a.py::T.test_a", action="convert",
+                           recipe_name="unittest_to_pytest"))
+    provider = Mock()
+    provider.complete_structured.side_effect = ProviderError("offline")
+    bad_tests = TestRunResult(command=[], return_code=1, total=1, passed=0,
+                             failed=1, errors=0, skipped=0, duration_seconds=0)
+    def corrupt_then_raise(*args, **kwargs):
+        target.write_text("partially written")
+        raise RuntimeError("tool crashed")
+    if failure == "codemod":
+        context = patch("cartograph.agents.rewriter.apply_codemod",
+                        side_effect=corrupt_then_raise)
+    elif failure == "test_runner":
+        context = patch("cartograph.agents.rewriter.run_tests",
+                        side_effect=RuntimeError("tool crashed"))
+    else:
+        context = patch("cartograph.agents.rewriter.run_tests", return_value=bad_tests)
+    with context, pytest.raises((ProviderError, RuntimeError)):
+        real_run_rewriter(provider, request)
+    assert target.read_text() == original
