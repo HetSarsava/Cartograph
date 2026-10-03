@@ -334,6 +334,8 @@ def _iter_python_files(root: Path):
             yield root
         return
     for path in root.rglob("*.py"):
+        if not path.resolve().is_relative_to(root.resolve()):
+            continue
         if any(part in _SKIP_DIR_NAMES for part in path.relative_to(root).parts[:-1]):
             continue
         yield path

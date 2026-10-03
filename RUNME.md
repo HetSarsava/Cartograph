@@ -18,7 +18,7 @@ uv sync --extra dev
 ## 1. No API key needed (~1 minute)
 
 ```bash
-uv run pytest -q                      # 154 passed
+uv run pytest -q                      # offline suite; live-provider test needs a key
 uv run cartograph serve               # opens http://127.0.0.1:8765
 ```
 
@@ -95,7 +95,7 @@ git snapshot/rollback, a structured pytest wrapper — is exposed over MCP for
 any client to call:
 
 ```bash
-uv run python -m cartograph.mcp_server.server   # stdio transport
+uv run cartograph-mcp --repo /path/to/trusted-repo   # stdio, read-only by default
 ```
 
 ---
@@ -130,3 +130,7 @@ $env:Path += ";$env:APPDATA\Python\Python312\Scripts"
 - **The migration always leaves one file unconverted.** That's the demo.
 
 Full detail is in [README.md](README.md).
+
+See [MCP setup and learning guide](docs/mcp-guide.md) for client configuration,
+the eight-tool demo, and the explicit execution flag. LangGraph is now a
+four-stage sequence without checkpoints or graph retry loops.

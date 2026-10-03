@@ -12,12 +12,13 @@ from __future__ import annotations
 from typing import TypedDict
 
 from cartograph.agents.adjudicator import AdjudicatorResponse
-from cartograph.agents.planner import PlanStep, PlannerResponse
+from cartograph.agents.planner import PlannerResponse, PlanStep
 from cartograph.agents.reporter import ReporterResponse
 from cartograph.agents.rewriter import RewriterResponse
 from cartograph.agents.scout import ScoutResponse
 from cartograph.graph.models import SymbolGraph
 from cartograph.tools.codemod import CodemodAmbiguity
+from cartograph.tools.test_runner import TestRunResult
 
 
 class RunState(TypedDict, total=False):
@@ -43,9 +44,6 @@ class RunState(TypedDict, total=False):
     # --- rewrite_step node (one step at a time, current_step tracks which) ---
     current_step: PlanStep | None
     rewriter_result: RewriterResponse | None
-    retried_once: bool
-    """Whether the *current* step has already been retried once."""
-
     # --- populated by finish_step_node, for the final run summary ---
     committed_symbol_ids: list[str]
     quarantined_symbol_ids: list[str]
@@ -53,22 +51,7 @@ class RunState(TypedDict, total=False):
     # --- ambiguity path ---
     pending_ambiguities: list[CodemodAmbiguity]
     adjudication_result: AdjudicatorResponse | None
-    adjudicated_this_step: bool
-    """Whether adjudicate_node has already run for the *current* step.
-
-    Prevents rewrite_step from re-attempting a codemod that's already been
-    escalated (or otherwise resolved by Adjudicator without producing a new
-    edit to try), which would just re-detect the same ambiguity forever —
-    apply_codemod is deterministic, so re-running it against unchanged
-    source reproduces the same ambiguity every time.
-    """
-
-    # --- per-step LLM call budget, independent safety net ---
-    llm_calls_this_step: int
-    """Agent calls made for the *current* step (rewrite_step's diagnosis
-    call + adjudicate's call). Reset per step; capped by
-    CARTOGRAPH_MAX_LLM_CALLS_PER_STEP so a routing bug fails fast and cheap
-    instead of looping until a provider-side quota cuts it off."""
+    final_tests: TestRunResult
 
     # --- reporter node ---
     reporter_result: ReporterResponse | None

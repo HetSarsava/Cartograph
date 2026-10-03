@@ -28,6 +28,7 @@ import logging
 from pydantic import BaseModel, Field
 
 from cartograph.agents.planner import PlanStep
+from cartograph.config import get_settings
 from cartograph.providers.base import LLMMessage, Provider
 from cartograph.tools import recipes as _recipes  # noqa: F401 - registers built-in recipes
 from cartograph.tools.codemod import CodemodAmbiguity, apply_codemod, get_recipe
@@ -139,7 +140,11 @@ def run_rewriter(provider: Provider, request: RewriterRequest) -> RewriterRespon
         target_file,
     )
 
-    codemod_result = apply_codemod(request.repo_path, step.recipe_name, target_files=[target_file])
+    try:
+        codemod_result = apply_codemod(request.repo_path, step.recipe_name, target_files=[target_file])
+    except Exception:
+        rollback(request.repo_path, snap.snapshot_id)
+        raise
     logger.info(
         "[tool:apply_codemod] recipe=%s target=%s applied=%s files_changed=%s ambiguity_count=%d",
         step.recipe_name,
@@ -173,7 +178,13 @@ def run_rewriter(provider: Provider, request: RewriterRequest) -> RewriterRespon
             success=True, attempts=[attempt], final_summary="Nothing to change; file already compliant."
         )
 
-    test_result = run_tests(request.repo_path)
+    try:
+        test_result = run_tests(
+            request.repo_path, timeout_seconds=get_settings().test_timeout_seconds
+        )
+    except Exception:
+        rollback(request.repo_path, snap.snapshot_id)
+        raise
     logger.info(
         "[gate:tests] target=%s passed=%d failed=%d errors=%d total=%d all_passed=%s",
         target_file,
@@ -205,11 +216,6 @@ def run_rewriter(provider: Provider, request: RewriterRequest) -> RewriterRespon
     # same recipe against the same file would reproduce the same result, so
     # there's no productive automated retry — the second turn is a genuine
     # LLM diagnosis of the failure instead of a pointless repeat tool call.
-    diagnosis: _FailureDiagnosis | None = None
-    if request.max_turns >= 2:
-        diagnosis = _diagnose_failure(provider, request, target_file, test_result)
-        attempts.append(RewriteAttempt(turn=2, description=f"Diagnosis: {diagnosis.root_cause}"))
-
     rollback_result = rollback(request.repo_path, snap.snapshot_id)
     logger.info(
         "[tool:rollback] snapshot=%s files_restored=%d files_removed=%d "
@@ -226,6 +232,11 @@ def run_rewriter(provider: Provider, request: RewriterRequest) -> RewriterRespon
             description=f"Rolled back to pre-edit snapshot {snap.snapshot_id} because tests failed.",
         )
     )
+
+    diagnosis: _FailureDiagnosis | None = None
+    if request.max_turns >= 2:
+        diagnosis = _diagnose_failure(provider, request, target_file, test_result)
+        attempts.append(RewriteAttempt(turn=len(attempts) + 1, description=f"Diagnosis: {diagnosis.root_cause}"))
 
     final_summary = (
         f"Tests failed after applying {step.recipe_name!r} to {target_file}; changes were rolled back."

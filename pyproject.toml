@@ -7,7 +7,7 @@ requires-python = ">=3.12"
 license = { text = "MIT" }
 authors = [{ name = "Cartograph" }]
 dependencies = [
-    "mcp>=1.2.0",
+    "mcp>=2.0.0,<3",
     "langgraph>=0.2.0",
     "pydantic>=2.7.0",
     "pydantic-settings>=2.4.0",
@@ -22,6 +22,7 @@ dependencies = [
 
 [project.scripts]
 cartograph = "cartograph.cli:main"
+cartograph-mcp = "cartograph.mcp_server.server:main"
 
 [project.optional-dependencies]
 dev = [

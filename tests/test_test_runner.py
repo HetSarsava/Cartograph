@@ -56,3 +56,11 @@ def test_run_tests_against_sample_repo_fixture():
     assert result.total >= 4
     assert result.failed == 0
     assert result.errors == 0
+
+
+def test_all_passed_rejects_interrupt_and_all_skipped_reports():
+    from cartograph.tools.test_runner import _to_result
+    report = {"summary": {"total": 1, "passed": 1}, "tests": []}
+    assert not _to_result([], 2, report).all_passed
+    report = {"summary": {"total": 1, "skipped": 1}, "tests": []}
+    assert not _to_result([], 0, report).all_passed
