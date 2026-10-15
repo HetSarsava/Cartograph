@@ -1,8 +1,26 @@
 # Cartograph
 
-Cartograph is a code-intelligence MCP server, plus a small LangGraph
-migration pipeline that uses the same deterministic Python tools against a real repo.
-The pipeline calls them directly; a separate client demo verifies the MCP protocol.
+Cartograph reviews Python patches by connecting changed functions and caller paths
+to actual pytest execution and bounded mutation checks. It asks: **“Your tests
+passed—but did they distinguish the behavior you changed?”** A standalone HTML
+report shows the evidence and what remains unknown. No API key is needed.
+
+```bash
+uv sync --extra dev
+uv run cartograph review-demo --output logs/change-review-demo
+# Or review your own working tree:
+uv run cartograph review --repo /path/to/project --base main
+```
+
+The synthetic demo shows a covered discount calculation whose weak test misses a
+mutation, then a stronger test that detects it. Reports live under each demo repo's
+`.cartograph/review/`. [Usage, labels, and limitations](docs/change-review.md).
+Mutation testing and affected-test selection have established prior art; this is
+a focused evidence report, not proof that a patch is safe.
+
+The existing code-intelligence MCP server and small LangGraph migration pipeline
+remain available. The pipeline calls deterministic Python tools directly; a
+separate client demo verifies the MCP protocol.
 
 > **Just want to run it?** [RUNME.md](RUNME.md) is the two-minute version.
 > **Learning MCP?** [The practical guide](docs/mcp-guide.md) explains JSON-RPC,
@@ -61,8 +79,10 @@ unchanged for a human — rather than guessed at. The bundled example converts
 **4. Give a coding agent better tools.**
 `cartograph` is an MCP server first. `uv run cartograph-mcp --repo /path/to/repo` exposes indexing, the graph queries, codemods,
 git snapshot/rollback, and a structured pytest wrapper to compatible local stdio MCP clients.
-Tests and mutations require the startup flag `--allow-execution`. There are eight
+Tests and mutations require the startup flag `--allow-execution`. There are nine
 working tools; query results are paginated and the graph stays on the server.
+The read-only `read_review_report` tool exposes a previously generated patch report
+and flags stale source; it never launches tests.
 
 ## The problem
 
@@ -171,7 +191,8 @@ Offline tests mock model responses; the live-provider test requires a Groq key.
   rather than guessing. Targets resolving outside the repo root are refused.
 - `agents/` — Scout, Planner, Rewriter, Adjudicator, Reporter, all calling
   Groq through `Provider` and validating responses into Pydantic models
-- `mcp_server/server.py` — eight working tools registered via the official
+- `review/` — patch mapping, per-test coverage, isolated mutation checks, and HTML evidence
+- `mcp_server/server.py` — nine working tools registered via the official
   MCP SDK; actual subprocess and raw JSON-RPC interoperability tests
 - `pipeline/` — four sequential stages: inspect, plan, execute, report.
   Five roles remain; execution uses an ordinary Python loop with one attempt

@@ -1,17 +1,22 @@
 # Cartograph architecture
 
-Cartograph has three separate pieces. MCP is its integration boundary;
-LangGraph is a small example workflow; tree-sitter builds the code data they use.
+Cartograph's patch review joins Git changes, Tree-sitter functions, per-test
+coverage and bounded mutations into an evidence report. MCP is its integration
+boundary; LangGraph remains a separate small migration example.
 
 ```mermaid
 flowchart LR
     Host["AI host + MCP client"] -->|"JSON-RPC 2.0 over stdio"| SDK["Official MCP SDK"]
-    SDK --> Tools["Eight Cartograph tools"]
+    SDK --> Tools["Nine Cartograph tools"]
     Tools --> Index["tree-sitter symbol graph"]
     Tools --> Actions["libcst / pytest / Git"]
     Workflow["Minimal LangGraph workflow"] -->|"ordinary Python calls"| Actions
     Workflow --> Index
     Workflow --> Groq["Groq for selection, planning, advice and reporting"]
+    Review["review CLI"] --> Index
+    Review --> Evidence["Disposable pytest baseline, contexts, controls, mutants"]
+    Evidence --> Report["HTML + JSON report"]
+    Tools -->|"read_review_report; no execution"| Report
 ```
 
 ## MCP: what is actually implemented
@@ -28,7 +33,7 @@ Modern discovery and the legacy initialize handshake are both exercised with
 a separate SDK client process. A raw subprocess test also checks JSON-RPC
 version fields, correlated IDs, tool calls and a `-32601` unknown-method error.
 
-Eight tools are exposed:
+Nine tools are exposed:
 
 | Tool | Purpose |
 | --- | --- |
@@ -40,15 +45,28 @@ Eight tools are exposed:
 | snapshot | Capture tracked and non-ignored files in a Git object |
 | rollback | Restore files and the index from a snapshot |
 | apply_codemod | Apply a registered deterministic libcst recipe |
+| read_review_report | Read the CLI-generated evidence report and flag changed source |
 
 The previous ninth registration, `pack_context`, raised `NotImplementedError`.
 It is no longer advertised. Its Python prototype is still explicitly deferred.
 
-Each server is bound to one repository at startup. Query calls refresh the
-graph from source, avoiding stale state and any client-supplied graph. They
-do not write an index cache. This favors simple correctness over maximum
-throughput; large repositories may need an in-memory incremental cache later.
-Symbol lists have stable ordering, a page limit of 100 and `next_offset`.
+Each server is bound to one repository at startup. Query calls hash the names
+and contents of the current Python files. An unchanged fingerprint reuses the
+graph in memory; source edits, additions, renames and removals trigger a full
+rebuild. Nothing is cached on disk by MCP queries. This is not incremental
+parsing: every query still scans/reads source, and edits require a full parse.
+A lock shares the cache between simultaneous queries. Changes during a rebuild
+are retried up to three times; repeated changes produce an actionable error.
+
+Location queries return concise symbol IDs, names, paths and line ranges by
+default; `detail="detailed"` restores full symbol metadata and docstrings.
+`blast_radius(name="helper")` resolves a unique name, indexes on demand, and
+returns compact caller locations with a `direct` flag. `file_path` disambiguates
+names. The existing `symbol_id` input remains supported. It therefore avoids
+requiring index → definition → callers → impact as four separate round trips.
+`index_repo` is optional diagnostics, not a query prerequisite. The original eight tool
+names remain unchanged. Symbol pages default to 20, have a maximum of 100 and
+`next_offset`; impact pages put immediate callers first.
 Pagination is not an atomic snapshot across concurrent external edits.
 Callers should re-query if files change.
 
@@ -57,6 +75,16 @@ code; this is a trusted local tool, not a sandbox. Rollback removes newer
 non-ignored files and updates the real Git index; it does not move HEAD.
 Query containment excludes Python symlinks resolving outside the repository.
 These boundaries do not isolate malicious code or concurrent filesystem changes.
+
+## Patch review
+
+`review/changes.py` maps Git new-side hunks to functions and generates syntax-valid
+operator mutations. `coverage_plugin.py` associates executable lines with actual
+pytest node IDs. `engine.py` runs a baseline, verifies each selected test set on
+unmutated source, and checks one mutant per fresh disposable copy. Failed controls,
+timeouts and collection errors are inconclusive. `render.py` writes escaped HTML
+and a versioned JSON report; the MCP reader recalculates the source digest.
+No model or LangGraph stage is involved. [Full behavior and limits](change-review.md).
 
 ## LangGraph: four sequential stages, five roles
 

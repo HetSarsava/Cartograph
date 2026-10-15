@@ -1,5 +1,32 @@
 # MCP, using Cartograph as the example
 
+For efficient dependency inspection, call `blast_radius` with `name` directly:
+
+```json
+{"name":"blast_radius","arguments":{"name":"calculate_total","max_depth":3}}
+```
+
+No initial `index_repo` or `find_definition` call is required. Results identify
+the target and label immediate callers with `direct: true`; other rows are known
+transitive callers. Read the returned source locations before deciding what to
+edit. If the name is ambiguous, provide its repository-relative `file_path`.
+Follow `next_offset` when present; default pages contain at most 20 symbols.
+Use `find_definition` for location-only questions, with `detail="detailed"` only
+when full metadata/docstrings are needed. Prefer ordinary search for text-only
+tasks or when the graph cannot resolve a dependency.
+
+The server reuses its in-memory graph only while source content is unchanged.
+It re-hashes Python files on each request, so warm queries avoid parsing but are
+not free. Source edits rebuild the graph; restarting the server loses the cache.
+Queries do not create cache files inside your repository.
+
+Design references: [Anthropic's tool guidance](https://www.anthropic.com/engineering/writing-tools-for-agents)
+recommends focused results, pagination and consolidating repeated tool sequences.
+[MCP structured output](https://modelcontextprotocol.io/specification/2025-11-25/server/tools)
+documents structured results and text compatibility. Cartograph keeps both SDK
+representations for compatibility; it reduces the payload itself instead of
+removing the text fallback.
+
 ## The four concepts to learn first
 
 1. **Host:** the AI application you use.
@@ -52,7 +79,7 @@ uv run python examples/mcp_client.py tests/fixtures/sample_repo --name add
 uv run pytest -q tests/test_mcp.py
 ```
 
-The example starts a separate Cartograph server, discovers eight tools,
+The example starts a separate Cartograph server, discovers nine tools,
 indexes the sample and queries a definition. The tests additionally exercise
 callers, impact, invalid arguments, write gating, a real codemod, pytest,
 snapshot/rollback and raw JSON-RPC messages.

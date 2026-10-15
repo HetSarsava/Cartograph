@@ -16,14 +16,10 @@ async def main(repo: str, name: str) -> None:
     async with Client(stdio_client(params), read_timeout_seconds=30) as client:
         tools = await client.list_tools()
         print("Discovered:", ", ".join(tool.name for tool in tools.tools))
-        for tool, arguments in [
-            ("index_repo", {}),
-            ("find_definition", {"name": name}),
-        ]:
-            result = await client.call_tool(tool, arguments)
-            if result.is_error:
-                raise RuntimeError(result.content)
-            print(tool, json.dumps(result.structured_content, indent=2))
+        result = await client.call_tool("blast_radius", {"name": name})
+        if result.is_error:
+            raise RuntimeError(result.content)
+        print("blast_radius", json.dumps(result.structured_content, indent=2))
 
 
 if __name__ == "__main__":

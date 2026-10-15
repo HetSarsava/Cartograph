@@ -233,6 +233,66 @@ def index_cmd(repo_path: str, visualize: bool) -> None:
         click.echo(f"Event file: {sink.path}")
 
 
+@cli.command(name="review")
+@click.option("--base", required=True, help="Git commit/ref to compare with the working tree.")
+@click.option("--repo", type=click.Path(exists=True, file_okay=False), default=".")
+@click.option("--test-path", multiple=True, default=("tests",),
+              help="Pytest path/node ID inside the repo; repeat to specify several.")
+@click.option("--output", type=click.Path(file_okay=False), default=None)
+@click.option("--max-mutations", type=click.IntRange(0, 100), default=5, show_default=True)
+@click.option("--timeout", type=click.IntRange(1, 600), default=60, show_default=True,
+              help="Seconds per pytest process, including baseline and controls.")
+@click.option("--fail-on-survivor", is_flag=True, help="Exit 1 when a mutation survives.")
+def review_cmd(base, repo, test_path, output, max_mutations, timeout, fail_on_survivor) -> None:
+    """Review a Python patch using actual pytest execution and bounded mutations.
+
+    Executes trusted repository tests in disposable source copies. Requires the
+    project's test dependencies in this interpreter. Does not edit source files.
+    """
+    import subprocess
+    from collections import Counter
+
+    from cartograph.review.engine import review
+
+    root = Path(repo).resolve()
+    destination = Path(output).resolve() if output else root / ".cartograph" / "review"
+    click.echo("Reviewing patch; running trusted pytest code in disposable copies...")
+    try:
+        report = review(root, base, destination, list(test_path),
+                        max_mutations=max_mutations, timeout=timeout)
+    except (ValueError, OSError, subprocess.SubprocessError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    counts = Counter(m.status for m in report.mutations)
+    click.echo(f"Review: {report.status}; baseline: {report.baseline.status}")
+    click.echo(f"Changed functions: {len(report.functions)}; mutations: {dict(counts)}")
+    click.echo(f"HTML: {destination / 'report.html'}")
+    click.echo(f"JSON: {destination / 'report.json'}")
+    click.echo("Coverage is execution evidence. Survivors need review; this is not a safe verdict.")
+    if report.status == "baseline_failed":
+        raise click.exceptions.Exit(2)
+    if fail_on_survivor and counts["survived"]:
+        raise click.exceptions.Exit(1)
+
+
+@cli.command(name="review-demo")
+@click.option("--output", type=click.Path(file_okay=False), required=True,
+              help="New directory for two synthetic repos and their reports.")
+def review_demo_cmd(output: str) -> None:
+    """Show a covered mutation surviving weak tests, then detected by a stronger test."""
+    from cartograph.review.demo import create_demo
+
+    destination = Path(output).resolve()
+    click.echo("Creating synthetic discount examples; running real pytest mutation checks...")
+    try:
+        reports = create_demo(destination)
+    except (ValueError, OSError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    for name, report in reports.items():
+        click.echo(f"{name}: baseline {report.baseline.status}; "
+                   f"mutations {[m.status for m in report.mutations]}")
+        click.echo(f"  {destination / name / '.cartograph/review/report.html'}")
+
+
 def _find_provider_error(exc: BaseException) -> ProviderError | None:
     """Find a ProviderError anywhere in `exc`'s cause chain.
 
@@ -375,8 +435,8 @@ def _print_summary(final_state: dict, duration_seconds: float, thread_id: str) -
             f"thread_id:           {thread_id}",
             f"wall_clock:          {duration_seconds:.1f}s",
             f"llm_calls:           {call_stats.call_count} ({call_stats.failed_call_count} failed)",
-            f"llm_tokens:          prompt={call_stats.total_prompt_tokens} "
-            f"completion={call_stats.total_completion_tokens} total={call_stats.total_tokens}",
+            (f"llm_tokens:          prompt={call_stats.total_prompt_tokens} "
+            f"completion={call_stats.total_completion_tokens} total={call_stats.total_tokens}"),
             f"targets_attempted:   {attempted}",
             f"targets_committed:   {len(committed)} {committed}",
             f"targets_quarantined: {len(quarantined)} {quarantined}",

@@ -12,7 +12,7 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample_repo"
 TOOLS = {"index_repo", "find_definition", "find_callers", "blast_radius",
-         "run_tests", "snapshot", "rollback", "apply_codemod"}
+         "run_tests", "snapshot", "rollback", "apply_codemod", "read_review_report"}
 
 
 @asynccontextmanager
@@ -72,6 +72,70 @@ async def test_pagination_freshness_and_invalid_arguments(tmp_path):
         ]:
             assert (await client.call_tool(tool, args)).is_error
     assert not (tmp_path / ".cartograph").exists()  # read-only queries do not write caches
+
+
+@pytest.mark.asyncio
+async def test_compact_results_and_one_call_impact(tmp_path):
+    doc = "Useful documentation. " * 200
+    (tmp_path / "module.py").write_text(
+        f'def target():\n    """{doc}"""\n    pass\n'
+        + "\n".join(f"def caller{i}(): return target()" for i in range(22))
+        + "\ndef indirect(): return caller0()\n"
+    )
+    async with connect(tmp_path) as client:
+        # First call needs neither explicit indexing nor a symbol-ID lookup.
+        impact = await call(client, "blast_radius", {"name": "target"})
+        assert impact["target"]["id"] == "module.py::target"
+        assert impact["total"] == 23 and impact["next_offset"] == 20
+        assert all(s["direct"] for s in impact["symbols"])
+        tail = await call(client, "blast_radius", {"name": "target", "offset": 20})
+        assert tail["next_offset"] is None
+        assert any(s["name"] == "indirect" and not s["direct"] for s in tail["symbols"])
+        concise = await call(client, "find_definition", {"name": "target"})
+        detailed = await call(client, "find_definition", {"name": "target", "detail": "detailed"})
+        assert "docstring" not in concise["symbols"][0]
+        assert detailed["symbols"][0]["docstring"] == doc.strip()
+        assert len(json.dumps(concise)) < len(json.dumps(detailed)) / 5
+        assert (await client.call_tool("blast_radius", {})).is_error
+        assert (await client.call_tool("blast_radius", {"name": "target", "symbol_id": "x"})).is_error
+
+
+@pytest.mark.asyncio
+async def test_impact_name_ambiguity_requires_explicit_selection(tmp_path):
+    for name in ["a", "b"]:
+        (tmp_path / f"{name}.py").write_text("def same(): pass\n")
+    async with connect(tmp_path) as client:
+        ambiguous = await client.call_tool("blast_radius", {"name": "same"})
+        assert ambiguous.is_error and "file_path" in ambiguous.content[0].text
+        chosen = await call(client, "blast_radius", {"name": "same", "file_path": "a.py"})
+        assert chosen["target"]["id"] == "a.py::same"
+        assert chosen["total"] == 0
+
+
+@pytest.mark.asyncio
+async def test_read_review_report_is_read_only_and_flags_staleness(tmp_path):
+    from cartograph.review.changes import git
+    from cartograph.review.engine import source_digest
+    from cartograph.review.models import ReviewReport
+
+    git(tmp_path, "init", "-q")
+    target = tmp_path / "app.py"
+    target.write_text("def total(): return 1\n")
+    async with connect(tmp_path) as client:
+        missing = await client.call_tool("read_review_report", {})
+        assert missing.is_error and "first run" in missing.content[0].text
+        output = tmp_path / ".cartograph/review"
+        output.mkdir(parents=True)
+        report = ReviewReport(repo=str(tmp_path.resolve()), base_ref="HEAD", base_commit="a",
+                              head_commit="a", created_utc="2026-10-15T00:00:00Z",
+                              source_digest=source_digest(tmp_path))
+        (output / "report.json").write_text(report.model_dump_json(), encoding="utf-8")
+        assert (await call(client, "read_review_report"))["source_matches_current"] is True
+        target.write_text("def total(): return 2\n")
+        assert (await call(client, "read_review_report"))["source_matches_current"] is False
+        listing = await client.list_tools()
+        tool = next(t for t in listing.tools if t.name == "read_review_report")
+        assert tool.annotations.read_only_hint
 
 
 @pytest.mark.asyncio

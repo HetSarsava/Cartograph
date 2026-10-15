@@ -132,5 +132,10 @@ $env:Path += ";$env:APPDATA\Python\Python312\Scripts"
 Full detail is in [README.md](README.md).
 
 See [MCP setup and learning guide](docs/mcp-guide.md) for client configuration,
-the eight-tool demo, and the explicit execution flag. LangGraph is now a
+the nine-tool discovery demo, and the explicit execution flag. LangGraph is now a
 four-stage sequence without checkpoints or graph retry loops.
+
+For the new patch-verification workflow, see [change review](docs/change-review.md):
+`uv run cartograph review-demo --output logs/change-review-demo` shows a covered
+mutation surviving weak tests and being detected by a stronger test. To review
+your own working tree: `uv run cartograph review --repo /path/to/project --base main`.
