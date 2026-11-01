@@ -73,7 +73,8 @@ def run_reporter(provider: Provider, request: ReporterRequest) -> ReporterRespon
             content=(
                 f"Task: {request.task_description}\n"
                 f"Repository test status after the run: {status}\n\n"
-                "Step summaries:\n" + ("\n".join(f"- {s}" for s in request.step_summaries) or "(none)")
+                "Step summaries:\n"
+                + ("\n".join(f"- {s}" for s in request.step_summaries) or "(none)")
                 + "\n\nNotes:\n"
                 + ("\n".join(f"- {n}" for n in request.notes) or "(none)")
             ),

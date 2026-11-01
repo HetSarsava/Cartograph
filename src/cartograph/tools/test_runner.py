@@ -65,8 +65,11 @@ class TestRunResult(BaseModel):
     def all_passed(self) -> bool:
         """True if at least one test ran and none failed or errored."""
         return (
-            self.return_code == 0 and self.collection_error is None
-            and self.passed > 0 and self.failed == 0 and self.errors == 0
+            self.return_code == 0
+            and self.collection_error is None
+            and self.passed > 0
+            and self.failed == 0
+            and self.errors == 0
         )
 
 
@@ -109,6 +112,7 @@ def run_tests(
                 capture_output=True,
                 text=True,
                 timeout=timeout_seconds,
+                check=False,
             )
         except subprocess.TimeoutExpired:
             return TestRunResult(

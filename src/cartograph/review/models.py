@@ -1,4 +1,5 @@
 """Versioned, serializable evidence shared by CLI, HTML and MCP."""
+
 from __future__ import annotations
 
 from typing import Literal
@@ -9,8 +10,15 @@ from cartograph.graph.models import Symbol
 
 RunStatus = Literal["passed", "failed", "error", "timeout"]
 MutationStatus = Literal[
-    "pending", "detected", "survived", "unexecuted", "timeout", "error",
-    "unstable_control", "budget_exhausted", "baseline_unavailable",
+    "pending",
+    "detected",
+    "survived",
+    "unexecuted",
+    "timeout",
+    "error",
+    "unstable_control",
+    "budget_exhausted",
+    "baseline_unavailable",
 ]
 
 
@@ -50,6 +58,13 @@ class Mutation(BaseModel):
     run: RunEvidence | None = None
 
 
+class ReviewMetrics(BaseModel):
+    elapsed_seconds: float = 0
+    pytest_processes: int = 0
+    test_executions: int = 0
+    mutation_attempts: int = 0
+
+
 class ReviewReport(BaseModel):
     schema_version: int = 1
     repo: str
@@ -65,5 +80,6 @@ class ReviewReport(BaseModel):
     functions: list[ChangedFunction] = Field(default_factory=list)
     mutations: list[Mutation] = Field(default_factory=list)
     baseline: RunEvidence | None = None
+    metrics: ReviewMetrics = Field(default_factory=ReviewMetrics)
     source: dict[str, str] = Field(default_factory=dict)
     limitations: list[str] = Field(default_factory=list)

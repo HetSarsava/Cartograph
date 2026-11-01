@@ -88,9 +88,7 @@ def test_self_recursive_symbol_terminates(tmp_path):
     graph = SymbolGraph(
         root_path="/tmp/cyclic",
         symbols={a.id: a},
-        edges=[
-            Edge(source_id=a.id, target_id=a.id, target_name="a", kind=EdgeKind.CALLS, line=1)
-        ],
+        edges=[Edge(source_id=a.id, target_id=a.id, target_name="a", kind=EdgeKind.CALLS, line=1)],
         files_indexed=["cyclic.py"],
         files_skipped=[],
     )
@@ -206,16 +204,15 @@ def test_view_toggle_sets_an_explicit_display_value(tmp_path):
     from cartograph.graph.tree_export import _HTML_TEMPLATE
 
     css = _HTML_TEMPLATE.split("<style>")[1].split("</style>")[0]
-    js = re.search(r"<script>(.*?)</script>", _HTML_TEMPLATE, re.S).group(1)
+    js = re.search(r"<script>(.*?)</script>", _HTML_TEMPLATE, re.DOTALL).group(1)
 
     hidden_by_css = set(re.findall(r"#([A-Za-z0-9_-]+)\s*\{[^}]*display:\s*none", css))
     assert "diagram-wrap" in hidden_by_css, "expected the diagram to start hidden"
 
     for element_id in hidden_by_css:
         for assignment in re.findall(
-            r'getElementById\("%s"\)\.style\.display\s*=\s*([^;]+);' % element_id, js
+            rf'getElementById\("{element_id}"\)\.style\.display\s*=\s*([^;]+);', js
         ):
             assert '""' not in assignment and "''" not in assignment, (
                 f"#{element_id} is hidden by CSS, so {assignment.strip()} leaves it hidden"
             )
-

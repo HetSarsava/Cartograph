@@ -94,10 +94,12 @@ def run(repo_path: str, task: str, thread_id: str | None, log_level: str) -> Non
         if cause is not None:
             logger.error("[orchestrator] run thread=%s failed: %s", resolved_thread_id, cause)
             raise click.ClickException(
-                f"{cause}" + chr(10) +
-                f"Check GROQ_MODEL in .env (currently {settings.groq_model!r}); "
-                f"run `cartograph models` to list the ids your key can use." + chr(10) +
-                f"Full log: {log_path}"
+                f"{cause}"
+                + chr(10)
+                + f"Check GROQ_MODEL in .env (currently {settings.groq_model!r}); "
+                f"run `cartograph models` to list the ids your key can use."
+                + chr(10)
+                + f"Full log: {log_path}"
             ) from exc
         logger.exception("[orchestrator] run thread=%s crashed", resolved_thread_id)
         click.echo(f"Run crashed. Full log: {log_path}", err=True)
@@ -109,7 +111,9 @@ def run(repo_path: str, task: str, thread_id: str | None, log_level: str) -> Non
         logger.info("[reporter] final report:\n%s", reporter_result.report_markdown)
         click.echo(reporter_result.report_markdown)
     else:
-        logger.warning("[orchestrator] run thread=%s did not reach the reporter node", resolved_thread_id)
+        logger.warning(
+            "[orchestrator] run thread=%s did not reach the reporter node", resolved_thread_id
+        )
         click.echo("Run did not reach the reporter node.", err=True)
 
     _print_summary(final_state, duration_seconds, resolved_thread_id)
@@ -236,12 +240,21 @@ def index_cmd(repo_path: str, visualize: bool) -> None:
 @cli.command(name="review")
 @click.option("--base", required=True, help="Git commit/ref to compare with the working tree.")
 @click.option("--repo", type=click.Path(exists=True, file_okay=False), default=".")
-@click.option("--test-path", multiple=True, default=("tests",),
-              help="Pytest path/node ID inside the repo; repeat to specify several.")
+@click.option(
+    "--test-path",
+    multiple=True,
+    default=("tests",),
+    help="Pytest path/node ID inside the repo; repeat to specify several.",
+)
 @click.option("--output", type=click.Path(file_okay=False), default=None)
 @click.option("--max-mutations", type=click.IntRange(0, 100), default=5, show_default=True)
-@click.option("--timeout", type=click.IntRange(1, 600), default=60, show_default=True,
-              help="Seconds per pytest process, including baseline and controls.")
+@click.option(
+    "--timeout",
+    type=click.IntRange(1, 600),
+    default=60,
+    show_default=True,
+    help="Seconds per pytest process, including baseline and controls.",
+)
 @click.option("--fail-on-survivor", is_flag=True, help="Exit 1 when a mutation survives.")
 def review_cmd(base, repo, test_path, output, max_mutations, timeout, fail_on_survivor) -> None:
     """Review a Python patch using actual pytest execution and bounded mutations.
@@ -258,12 +271,14 @@ def review_cmd(base, repo, test_path, output, max_mutations, timeout, fail_on_su
     destination = Path(output).resolve() if output else root / ".cartograph" / "review"
     click.echo("Reviewing patch; running trusted pytest code in disposable copies...")
     try:
-        report = review(root, base, destination, list(test_path),
-                        max_mutations=max_mutations, timeout=timeout)
+        report = review(
+            root, base, destination, list(test_path), max_mutations=max_mutations, timeout=timeout
+        )
     except (ValueError, OSError, subprocess.SubprocessError) as exc:
         raise click.ClickException(str(exc)) from exc
     counts = Counter(m.status for m in report.mutations)
-    click.echo(f"Review: {report.status}; baseline: {report.baseline.status}")
+    baseline_status = report.baseline.status if report.baseline is not None else "unavailable"
+    click.echo(f"Review: {report.status}; baseline: {baseline_status}")
     click.echo(f"Changed functions: {len(report.functions)}; mutations: {dict(counts)}")
     click.echo(f"HTML: {destination / 'report.html'}")
     click.echo(f"JSON: {destination / 'report.json'}")
@@ -275,8 +290,12 @@ def review_cmd(base, repo, test_path, output, max_mutations, timeout, fail_on_su
 
 
 @cli.command(name="review-demo")
-@click.option("--output", type=click.Path(file_okay=False), required=True,
-              help="New directory for two synthetic repos and their reports.")
+@click.option(
+    "--output",
+    type=click.Path(file_okay=False),
+    required=True,
+    help="New directory for two synthetic repos and their reports.",
+)
 def review_demo_cmd(output: str) -> None:
     """Show a covered mutation surviving weak tests, then detected by a stronger test."""
     from cartograph.review.demo import create_demo
@@ -288,8 +307,10 @@ def review_demo_cmd(output: str) -> None:
     except (ValueError, OSError) as exc:
         raise click.ClickException(str(exc)) from exc
     for name, report in reports.items():
-        click.echo(f"{name}: baseline {report.baseline.status}; "
-                   f"mutations {[m.status for m in report.mutations]}")
+        baseline_status = report.baseline.status if report.baseline is not None else "unavailable"
+        click.echo(
+            f"{name}: baseline {baseline_status}; mutations {[m.status for m in report.mutations]}"
+        )
         click.echo(f"  {destination / name / '.cartograph/review/report.html'}")
 
 
@@ -355,7 +376,9 @@ def tree_cmd(repo_path: str, output: str | None) -> None:
 @click.option(
     "--no-browser", is_flag=True, default=False, help="Don't open a browser automatically."
 )
-@click.option("--log-level", default="INFO", show_default=True, help="Logging level for the server.")
+@click.option(
+    "--log-level", default="INFO", show_default=True, help="Logging level for the server."
+)
 def serve_cmd(port: int, no_browser: bool, log_level: str) -> None:
     """Start the local web UI for indexing repos and browsing trees.
 
@@ -435,8 +458,10 @@ def _print_summary(final_state: dict, duration_seconds: float, thread_id: str) -
             f"thread_id:           {thread_id}",
             f"wall_clock:          {duration_seconds:.1f}s",
             f"llm_calls:           {call_stats.call_count} ({call_stats.failed_call_count} failed)",
-            (f"llm_tokens:          prompt={call_stats.total_prompt_tokens} "
-            f"completion={call_stats.total_completion_tokens} total={call_stats.total_tokens}"),
+            (
+                f"llm_tokens:          prompt={call_stats.total_prompt_tokens} "
+                f"completion={call_stats.total_completion_tokens} total={call_stats.total_tokens}"
+            ),
             f"targets_attempted:   {attempted}",
             f"targets_committed:   {len(committed)} {committed}",
             f"targets_quarantined: {len(quarantined)} {quarantined}",

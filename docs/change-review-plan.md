@@ -74,3 +74,13 @@ The final isolation/rendering changes were additionally checked by all 16 review
 tests. Ruff and mypy pass for the changed review/MCP modules. Both real generated
 reports were inspected in the in-app browser. Artifacts are under
 `logs/change-review-demo/{weak,strong}/.cartograph/review/` (ignored by Git).
+
+## Agent workflow extension
+
+The follow-up plan is in [agent-review-loop-plan.md](agent-review-loop-plan.md).
+`review_patch` now runs review from MCP, returns compact findings and bounded
+baseline diagnostics, and tracks one initial review plus two changed-source
+re-reviews per session. Same-source calls do not rerun. HTML/JSON and MCP output
+include wall time, pytest process/test counts and mutation attempts. Model-token
+usage remains host telemetry and is reported as unavailable. The coding agent
+does repairs; Cartograph never edits source as part of this review loop.

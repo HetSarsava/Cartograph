@@ -310,7 +310,7 @@ def test_bundled_fixture_is_still_pre_migration():
 
 def test_page_references_only_elements_it_defines():
     """A typo in a getElementById would break the UI silently at runtime."""
-    js = re.search(r"<script>(.*?)</script>", PAGE, re.S).group(1)
+    js = re.search(r"<script>(.*?)</script>", PAGE, re.DOTALL).group(1)
 
     # An id can be declared in the static markup or in a JS template that
     # renders markup (the neighbourhood <svg>, for instance), so scan both.
@@ -323,8 +323,8 @@ def test_page_references_only_elements_it_defines():
 def test_page_is_self_contained():
     """A strict no-network page: everything inline, nothing fetched remotely."""
     assert "<script>" in PAGE
-    assert "src=\"http" not in PAGE
-    assert "href=\"http" not in PAGE.split("<script>")[0].replace(
+    assert 'src="http' not in PAGE
+    assert 'href="http' not in PAGE.split("<script>")[0].replace(
         'href="https://console.groq.com/keys"', ""
     )
 
@@ -333,13 +333,13 @@ def test_neighbourhood_arrowheads_are_sized_independently_of_stroke_width():
     """SVG markerUnits defaults to strokeWidth, which on a 1px line renders
     an arrowhead a few pixels across in the same colour as the line — there,
     but invisible, so the graph reads as undirected."""
-    js = re.search(r"<script>(.*?)</script>", PAGE, re.S).group(1)
+    js = re.search(r"<script>(.*?)</script>", PAGE, re.DOTALL).group(1)
 
     assert 'markerUnits: "userSpaceOnUse"' in js
     # One marker serves both ends: at the start it flips, which is what a
     # mutual call needs.
     assert 'orient: "auto-start-reverse"' in js
-    assert 'marker-start' in js
+    assert "marker-start" in js
 
 
 def test_page_defines_every_function_it_calls():
@@ -349,11 +349,11 @@ def test_page_defines_every_function_it_calls():
     inspector panel was being reworked -- the page loaded, the search box
     just silently did nothing.
     """
-    js = re.search(r"<script>(.*?)</script>", PAGE, re.S).group(1)
+    js = re.search(r"<script>(.*?)</script>", PAGE, re.DOTALL).group(1)
 
     # Blank out string and template literals first: "translate(" and "url("
     # are CSS fragments, not calls.
-    stripped = re.sub(r"\"[^\"\n]*\"|'[^'\n]*'|`(?:[^`\\]|\\.)*`", '""', js, flags=re.S)
+    stripped = re.sub(r"\"[^\"\n]*\"|'[^'\n]*'|`(?:[^`\\]|\\.)*`", '""', js, flags=re.DOTALL)
 
     defined = set(re.findall(r"(?:async\s+)?function\s+([A-Za-z_$][\w$]*)", js))
     defined |= set(re.findall(r"(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=", js))
@@ -361,10 +361,28 @@ def test_page_defines_every_function_it_calls():
     # Bare calls only -- `x.foo(` is a method on something we can't check here.
     called = set(re.findall(r"(?<![.\w$])([a-z_$][\w$]*)\s*\(", stripped))
     builtins = {
-        "if", "for", "while", "switch", "catch", "function", "return", "typeof",
-        "fetch", "setTimeout", "clearTimeout", "parseInt", "parseFloat",
-        "encodeURIComponent", "decodeURIComponent", "await", "new", "else",
-        "do", "try", "isNaN", "require",
+        "if",
+        "for",
+        "while",
+        "switch",
+        "catch",
+        "function",
+        "return",
+        "typeof",
+        "fetch",
+        "setTimeout",
+        "clearTimeout",
+        "parseInt",
+        "parseFloat",
+        "encodeURIComponent",
+        "decodeURIComponent",
+        "await",
+        "new",
+        "else",
+        "do",
+        "try",
+        "isNaN",
+        "require",
     }
 
     missing = sorted(called - defined - builtins)
@@ -383,9 +401,7 @@ def test_inspector_columns_have_no_nested_scroll_regions():
 
     # Two intended scroll regions: the results list, and the live migration
     # log (which tails output and has to scroll).
-    assert sorted(scrolling) == [".log", ".results"], (
-        f"unexpected scroll regions: {scrolling}"
-    )
+    assert sorted(scrolling) == [".log", ".results"], f"unexpected scroll regions: {scrolling}"
     assert "LIST_CAP" in PAGE
 
 

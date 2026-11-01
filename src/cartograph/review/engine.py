@@ -1,8 +1,10 @@
 """Join patch, call graph, execution contexts and isolated mutation evidence."""
+
 from __future__ import annotations
 
 import hashlib
 import tempfile
+import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -23,9 +25,12 @@ def source_digest(root: Path, files: list[str] | None = None) -> str:
     digest = hashlib.sha256()
     for name in files if files is not None else files_to_copy(root):
         path = root / name
-        if (not path.is_file() or path.is_symlink()
-                or not path.resolve().is_relative_to(root.resolve())
-                or any(p in (".git", ".cartograph") for p in Path(name).parts)):
+        if (
+            not path.is_file()
+            or path.is_symlink()
+            or not path.resolve().is_relative_to(root.resolve())
+            or any(p in (".git", ".cartograph") for p in Path(name).parts)
+        ):
             continue
         digest.update(name.encode("utf-8") + b"\0")
         digest.update(hashlib.sha256(path.read_bytes()).digest())
@@ -49,9 +54,15 @@ def classify_mutation(run: RunEvidence, tests: list[str]) -> MutationStatus:
 
 
 def review(
-    repo: Path, base: str, output: Path, test_paths: list[str], *,
-    max_mutations: int = 5, timeout: int = 60,
+    repo: Path,
+    base: str,
+    output: Path,
+    test_paths: list[str],
+    *,
+    max_mutations: int = 5,
+    timeout: int = 60,
 ) -> ReviewReport:
+    started = time.monotonic()
     root = repo.resolve(strict=True)
     top = Path(git(root, "rev-parse", "--show-toplevel").decode().strip()).resolve()
     if root != top:
@@ -86,21 +97,36 @@ def review(
     changed, patch, warnings = diff_lines(root, base_commit)
     run_dir = output / "runs" / uuid.uuid4().hex[:12]
     run_dir.mkdir(parents=True)
-    report = ReviewReport(repo=str(root), base_ref=base, base_commit=base_commit,
-                          head_commit=head, source_digest=before,
-                          created_utc=datetime.now(UTC).isoformat(), patch=patch,
-                          changed_files=sorted(changed), limitations=[
-        "Partial static call graph: unresolved/dynamic calls are unknown; caller paths capped at 30.",
-        ("Coverage is execution evidence, not assertion evidence. Import/collection-time execution "
-        "has no test context. Shared fixture execution is attributed only to the test that ran it."),
-        ("Only selected operators on new-side changed function lines are mutated. A survivor may "
-        "be equivalent or intentional; detection is not proof that the patch is correct."),
-        ("Serial pytest in disposable source copies, using the current interpreter/dependencies. "
-        "Ignored files, editable installs pointing outside the copy, external services and "
-        "subprocess execution are not isolated or fully measured. This is not a security sandbox."),
-        ("Project addopts and inherited PYTEST_ADDOPTS are cleared for controlled serial runs. "
-        "A passing report never substitutes for the project's full CI configuration."),
-    ])
+    report = ReviewReport(
+        repo=str(root),
+        base_ref=base,
+        base_commit=base_commit,
+        head_commit=head,
+        source_digest=before,
+        created_utc=datetime.now(UTC).isoformat(),
+        patch=patch,
+        changed_files=sorted(changed),
+        limitations=[
+            "Partial static call graph: unresolved/dynamic calls are unknown; caller paths capped at 30.",
+            (
+                "Coverage is execution evidence, not assertion evidence. Import/collection-time execution "
+                "has no test context. Shared fixture execution is attributed only to the test that ran it."
+            ),
+            (
+                "Only selected operators on new-side changed function lines are mutated. A survivor may "
+                "be equivalent or intentional; detection is not proof that the patch is correct."
+            ),
+            (
+                "Serial pytest in disposable source copies, using the current interpreter/dependencies. "
+                "Ignored files, editable installs pointing outside the copy, external services and "
+                "subprocess execution are not isolated or fully measured. This is not a security sandbox."
+            ),
+            (
+                "Project addopts and inherited PYTEST_ADDOPTS are cleared for controlled serial runs. "
+                "A passing report never substitutes for the project's full CI configuration."
+            ),
+        ],
+    )
     with tempfile.TemporaryDirectory(prefix="cg-review-") as temp:
         scratch = Path(temp)
         frozen = scratch / "snapshot"
@@ -111,19 +137,25 @@ def review(
         report.functions, mapping_warnings = changed_functions(graph, changed)
         warnings.extend(mapping_warnings)
         if not report.functions:
-            warnings.append("No changed production functions mapped; no mutation evidence available.")
+            warnings.append(
+                "No changed production functions mapped; no mutation evidence available."
+            )
         warnings.extend(f"File could not be indexed: {name}" for name in graph.files_skipped)
         unknown = sum(edge.target_id is None for edge in graph.edges)
         report.limitations.append(f"Graph contains {unknown} unresolved call edges.")
-        report.source = {name: (frozen / name).read_text(encoding="utf-8", errors="replace")
-                         for name in changed if name.endswith(".py") and (frozen / name).is_file()}
+        report.source = {
+            name: (frozen / name).read_text(encoding="utf-8", errors="replace")
+            for name in changed
+            if name.endswith(".py") and (frozen / name).is_file()
+        }
         for function in report.functions:
             for caller_path in function.caller_paths:
                 for sid in caller_path:
                     name = graph.symbols[sid].file_path
                     if name not in report.source:
                         report.source[name] = (frozen / name).read_text(
-                            encoding="utf-8", errors="replace")
+                            encoding="utf-8", errors="replace"
+                        )
         report.mutations = candidates(frozen, report.functions)
         if len(report.mutations) > 500:
             report.mutations = report.mutations[:500]
@@ -139,17 +171,19 @@ def review(
             measured = baseline.coverage.get(file, {})
             executable = baseline.executable_lines.get(file, [])
             function.tests_by_line = {
-                line: sorted(t for t in measured.get(line, [])
-                             if baseline.tests.get(t) == "passed")
-                for line in function.changed_lines if line in executable
+                line: sorted(t for t in measured.get(line, []) if baseline.tests.get(t) == "passed")
+                for line in function.changed_lines
+                if line in executable
             }
-            function.uncovered_lines = [line for line, tests in function.tests_by_line.items()
-                                        if not tests]
+            function.uncovered_lines = [
+                line for line, tests in function.tests_by_line.items() if not tests
+            ]
         controls: dict[tuple[str, ...], RunEvidence] = {}
         attempted = 0
         for mutation in report.mutations:
             mutation.selected_tests = sorted(
-                t for t in baseline.coverage.get(mutation.file, {}).get(mutation.line, [])
+                t
+                for t in baseline.coverage.get(mutation.file, {}).get(mutation.line, [])
                 if baseline.tests.get(t) == "passed"
             )
             if baseline.status != "passed":
@@ -166,8 +200,9 @@ def review(
             if key not in controls:
                 control_repo = scratch / f"control-{mutation.id}"
                 copy_snapshot(frozen, control_repo, files)
-                controls[key] = run_pytest(control_repo, list(key),
-                                           run_dir / f"control-{mutation.id}", timeout)
+                controls[key] = run_pytest(
+                    control_repo, list(key), run_dir / f"control-{mutation.id}", timeout
+                )
             mutation.control = controls[key]
             if not _selection_passed(mutation.control, mutation.selected_tests):
                 mutation.status = "unstable_control"
@@ -176,24 +211,45 @@ def review(
             copy_snapshot(frozen, mutant_repo, files)
             target = mutant_repo / mutation.file
             source = target.read_bytes()
-            target.write_bytes(source[:mutation.start_byte] + mutation.replacement.encode()
-                               + source[mutation.end_byte:])
-            mutation.run = run_pytest(mutant_repo, mutation.selected_tests,
-                                      run_dir / mutation.id, timeout)
+            target.write_bytes(
+                source[: mutation.start_byte]
+                + mutation.replacement.encode()
+                + source[mutation.end_byte :]
+            )
+            mutation.run = run_pytest(
+                mutant_repo, mutation.selected_tests, run_dir / mutation.id, timeout
+            )
             mutation.status = classify_mutation(mutation.run, mutation.selected_tests)
-            mutation.failing_tests = sorted(t for t in mutation.selected_tests
-                                           if mutation.run.tests.get(t) == "failed")
+            mutation.failing_tests = sorted(
+                t for t in mutation.selected_tests if mutation.run.tests.get(t) == "failed"
+            )
         report.source_matches_current = source_digest(root) == before
         if not report.source_matches_current:
-            warnings.append("Checkout changed after snapshot; this report describes the recorded digest.")
+            warnings.append(
+                "Checkout changed after snapshot; this report describes the recorded digest."
+            )
         if baseline.status != "passed":
             report.status = "baseline_failed"
-        elif warnings or any(m.status not in ("detected", "survived", "unexecuted")
-                             for m in report.mutations):
+        elif warnings or any(
+            m.status not in ("detected", "survived", "unexecuted") for m in report.mutations
+        ):
             report.status = "incomplete"
         else:
             report.status = "complete"
+    runs = {}
+    if report.baseline is not None:
+        runs[report.baseline.log] = report.baseline
+    for mutation in report.mutations:
+        if mutation.control is not None:
+            runs[mutation.control.log] = mutation.control
+        if mutation.run is not None:
+            runs[mutation.run.log] = mutation.run
+    report.metrics.elapsed_seconds = round(time.monotonic() - started, 3)
+    report.metrics.pytest_processes = len(runs)
+    report.metrics.test_executions = sum(len(run.tests) for run in runs.values())
+    report.metrics.mutation_attempts = sum(m.run is not None for m in report.mutations)
     report.limitations.extend(sorted(set(warnings)))
     from cartograph.review.render import write_report
+
     write_report(report, output)
     return report

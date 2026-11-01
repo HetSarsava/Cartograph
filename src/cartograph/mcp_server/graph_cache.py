@@ -1,4 +1,5 @@
 """Process-local graph reuse, invalidated by source content rather than timestamps."""
+
 from __future__ import annotations
 
 import hashlib
@@ -48,4 +49,6 @@ class RepositoryGraph:
                 except FileNotFoundError:
                     # Files may be added/removed by an editor during scanning.
                     continue
-            raise ValueError("Repository changed repeatedly while indexing; retry after edits settle")
+            raise ValueError(
+                "Repository changed repeatedly while indexing; retry after edits settle"
+            )

@@ -95,7 +95,8 @@ def run_adjudicator(provider: Provider, request: AdjudicatorRequest) -> Adjudica
     response = provider.complete_structured(messages, AdjudicatorResponse)
 
     if response.decision == AdjudicationDecision.APPLY_CANDIDATE and (
-        not response.chosen_candidate or response.chosen_candidate not in request.ambiguity.candidates
+        not response.chosen_candidate
+        or response.chosen_candidate not in request.ambiguity.candidates
     ):
         logger.warning(
             "[adjudicator] APPLY_CANDIDATE with invalid/unlisted chosen_candidate=%r "

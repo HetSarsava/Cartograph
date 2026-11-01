@@ -299,9 +299,7 @@ def compute_insights(graph: SymbolGraph) -> dict[str, Any]:
     incoming = _incoming_counts(graph)
     outgoing = Counter(edge.source_id for edge in graph.edges)
 
-    functions = [
-        s for s in graph.symbols.values() if s.kind.value in ("function", "method")
-    ]
+    functions = [s for s in graph.symbols.values() if s.kind.value in ("function", "method")]
 
     most_called = sorted(
         (s for s in graph.symbols.values() if incoming.get(s.id)),
@@ -312,11 +310,7 @@ def compute_insights(graph: SymbolGraph) -> dict[str, Any]:
     # the indexer can't see. Worth a look either way -- hence the hedge in
     # the UI copy rather than calling them "dead".
     never_called = sorted(
-        (
-            s
-            for s in functions
-            if not incoming.get(s.id) and not s.name.startswith("test_")
-        ),
+        (s for s in functions if not incoming.get(s.id) and not s.name.startswith("test_")),
         key=lambda s: s.qualified_name,
     )
 
@@ -345,9 +339,7 @@ def compute_insights(graph: SymbolGraph) -> dict[str, Any]:
             "functions": len(functions),
             "classes": sum(1 for s in graph.symbols.values() if s.kind.value == "class"),
         },
-        "most_called": [
-            {**_brief(s, graph), "count": incoming[s.id]} for s in most_called
-        ],
+        "most_called": [{**_brief(s, graph), "count": incoming[s.id]} for s in most_called],
         "most_calls_out": [
             {**_brief(s, graph), "count": outgoing[s.id]}
             for s in sorted(
@@ -357,9 +349,7 @@ def compute_insights(graph: SymbolGraph) -> dict[str, Any]:
         ],
         "never_called": [_brief(s, graph) for s in never_called[:8]],
         "never_called_total": len(never_called),
-        "biggest": [
-            {**_brief(s, graph), "lines": s.line_end - s.line_start + 1} for s in biggest
-        ],
+        "biggest": [{**_brief(s, graph), "lines": s.line_end - s.line_start + 1} for s in biggest],
         "busiest_files": [{"file_path": f, "count": n} for f, n in busiest_files],
         "top_unresolved": [{"name": n, "count": c} for n, c in unresolved_names],
     }

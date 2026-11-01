@@ -510,8 +510,10 @@ def _string_literal_value(string_node: Node, source: bytes) -> str:
             stripped = stripped[len(prefix) :]
             break
     for quote in ('"""', "'''", '"', "'"):
-        if stripped.startswith(quote) and stripped.endswith(quote) and len(stripped) >= 2 * len(
-            quote
+        if (
+            stripped.startswith(quote)
+            and stripped.endswith(quote)
+            and len(stripped) >= 2 * len(quote)
         ):
             return stripped[len(quote) : -len(quote)].strip()
     return stripped

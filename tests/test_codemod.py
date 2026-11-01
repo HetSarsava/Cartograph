@@ -50,9 +50,7 @@ def test_applies_to_detects_unittest_dotted_base():
 
 def test_applies_to_detects_bare_testcase_import():
     recipe = UnittestToPytestRecipe()
-    module = cst.parse_module(
-        "from unittest import TestCase\n\nclass Foo(TestCase):\n    pass\n"
-    )
+    module = cst.parse_module("from unittest import TestCase\n\nclass Foo(TestCase):\n    pass\n")
     assert recipe.applies_to("foo.py", module) is True
 
 
@@ -153,7 +151,9 @@ def test_unrecognized_assertion_is_ambiguous_and_left_alone():
 
 
 def test_assert_raises_as_plain_call_is_ambiguous():
-    source = "class T(TestCase):\n    def test_a(self):\n        self.assertRaises(ValueError, f, x)\n"
+    source = (
+        "class T(TestCase):\n    def test_a(self):\n        self.assertRaises(ValueError, f, x)\n"
+    )
     code, ambiguities = _transform(source)
     assert len(ambiguities) == 1
     assert "plain call" in ambiguities[0].description

@@ -34,6 +34,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import libcst as cst
+from libcst.metadata import PositionProvider
 
 from cartograph.tools.codemod import CodemodAmbiguity, register_recipe
 
@@ -93,9 +94,12 @@ def _has_pytest_import(module: cst.Module) -> bool:
                     for alias in small.names
                 ):
                     return True
-            elif isinstance(small, cst.ImportFrom):
-                if isinstance(small.module, cst.Name) and small.module.value == "pytest":
-                    return True
+            elif (
+                isinstance(small, cst.ImportFrom)
+                and isinstance(small.module, cst.Name)
+                and small.module.value == "pytest"
+            ):
+                return True
     return False
 
 
@@ -127,16 +131,19 @@ class _TestCaseFinder(cst.CSTVisitor):
     def visit_ClassDef(self, node: cst.ClassDef) -> None:
         for arg in node.bases:
             base = arg.value
-            if isinstance(base, cst.Name) and base.value == "TestCase":
-                self.found = True
-            elif isinstance(base, cst.Attribute) and base.attr.value == "TestCase":
+            if (
+                isinstance(base, cst.Name)
+                and base.value == "TestCase"
+                or isinstance(base, cst.Attribute)
+                and base.attr.value == "TestCase"
+            ):
                 self.found = True
 
 
 class _AssertRewriter(cst.CSTTransformer):
     """Rewrites `self.assertX(...)` call sites; collects ambiguities it can't."""
 
-    METADATA_DEPENDENCIES = (cst.metadata.PositionProvider,)
+    METADATA_DEPENDENCIES = (PositionProvider,)
 
     def __init__(self, file_path: str) -> None:
         super().__init__()
@@ -146,18 +153,18 @@ class _AssertRewriter(cst.CSTTransformer):
 
     def _line_of(self, node: cst.CSTNode) -> int | None:
         try:
-            return self.get_metadata(cst.metadata.PositionProvider, node).start.line
+            return self.get_metadata(PositionProvider, node).start.line
         except KeyError:
             return None
 
     def _ambiguous(self, node: cst.CSTNode, description: str) -> None:
         self.ambiguities.append(
-            CodemodAmbiguity(file_path=self.file_path, line=self._line_of(node), description=description)
+            CodemodAmbiguity(
+                file_path=self.file_path, line=self._line_of(node), description=description
+            )
         )
 
-    def leave_Expr(
-        self, original_node: cst.Expr, updated_node: cst.Expr
-    ) -> cst.BaseSmallStatement:
+    def leave_Expr(self, original_node: cst.Expr, updated_node: cst.Expr) -> cst.BaseSmallStatement:
         name = _self_assert_name(original_node.value)
         if name is None:
             return updated_node
@@ -214,7 +221,9 @@ class _AssertRewriter(cst.CSTTransformer):
             return updated_node
 
         self.used_pytest_raises = True
-        new_call = call.with_changes(func=cst.Attribute(value=cst.Name("pytest"), attr=cst.Name("raises")))
+        new_call = call.with_changes(
+            func=cst.Attribute(value=cst.Name("pytest"), attr=cst.Name("raises"))
+        )
         new_item = updated_node.items[0].with_changes(item=new_call)
         return updated_node.with_changes(items=[new_item])
 

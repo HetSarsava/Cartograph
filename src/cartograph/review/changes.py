@@ -1,4 +1,5 @@
 """Git new-side changes and bounded Tree-sitter mutation candidates."""
+
 from __future__ import annotations
 
 import re
@@ -15,8 +16,11 @@ from cartograph.review.models import ChangedFunction, Mutation
 
 def git(root: Path, *args: str) -> bytes:
     result = subprocess.run(
-        ["git", "-c", "core.quotePath=false", *args], cwd=root,
-        capture_output=True, timeout=30, check=False,
+        ["git", "-c", "core.quotePath=false", *args],
+        cwd=root,
+        capture_output=True,
+        timeout=30,
+        check=False,
     )
     if result.returncode:
         raise ValueError(result.stderr.decode("utf-8", errors="replace").strip())
@@ -33,9 +37,11 @@ def diff_lines(root: Path, base: str) -> tuple[dict[str, set[int]], str, list[st
     changed = git(root, "diff", "--name-only", "-z", "--no-renames", base, "--")
     new = git(root, "ls-files", "--others", "--exclude-standard", "-z")
     new_names = {x.decode("utf-8") for x in new.split(b"\0") if x}
-    names = sorted(name for name in (
-        {x.decode("utf-8") for x in changed.split(b"\0") if x} | new_names
-    ) if ".cartograph" not in Path(name).parts)
+    names = sorted(
+        name
+        for name in ({x.decode("utf-8") for x in changed.split(b"\0") if x} | new_names)
+        if ".cartograph" not in Path(name).parts
+    )
     lines: dict[str, set[int]] = {}
     patches, warnings = [], []
     for name in names:
@@ -52,15 +58,25 @@ def diff_lines(root: Path, base: str) -> tuple[dict[str, set[int]], str, list[st
             else:
                 warnings.append(f"New symlink or missing file not analyzed: {name}")
             continue
-        patch = git(root, "diff", "--no-ext-diff", "--no-textconv", "--no-renames",
-                    "--unified=0", base, "--", f":(literal){name}").decode(
-                        "utf-8", errors="replace")
+        patch = git(
+            root,
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-renames",
+            "--unified=0",
+            base,
+            "--",
+            f":(literal){name}",
+        ).decode("utf-8", errors="replace")
         patches.append(patch)
         if path.suffix != ".py":
             warnings.append(f"Non-Python change not analyzed: {name}")
             continue
         affected: set[int] = set()
-        for match in re.finditer(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", patch, re.MULTILINE):
+        for match in re.finditer(
+            r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", patch, re.MULTILINE
+        ):
             old_count = int(match[2]) if match[2] is not None else 1
             count = int(match[4]) if match[4] is not None else 1
             affected.update(range(int(match[3]), int(match[3]) + count))
@@ -72,8 +88,12 @@ def diff_lines(root: Path, base: str) -> tuple[dict[str, set[int]], str, list[st
 
 def is_test_file(name: str) -> bool:
     path = Path(name)
-    return ("tests" in path.parts or path.name == "conftest.py"
-            or path.name.startswith("test_") or path.name.endswith("_test.py"))
+    return (
+        "tests" in path.parts
+        or path.name == "conftest.py"
+        or path.name.startswith("test_")
+        or path.name.endswith("_test.py")
+    )
 
 
 def caller_paths(graph: SymbolGraph, target: str, limit: int = 30) -> list[list[str]]:
@@ -98,7 +118,8 @@ def caller_paths(graph: SymbolGraph, target: str, limit: int = 30) -> list[list[
 
 
 def changed_functions(
-    graph: SymbolGraph, lines: dict[str, set[int]],
+    graph: SymbolGraph,
+    lines: dict[str, set[int]],
 ) -> tuple[list[ChangedFunction], list[str]]:
     assigned: dict[str, list[int]] = {}
     warnings = []
@@ -107,21 +128,38 @@ def changed_functions(
             warnings.append(f"Test/configuration file changed, not mutated: {file}")
             continue
         for line in sorted(numbers):
-            candidates = [s for s in graph.symbols.values() if s.file_path == file
-                          and s.kind in (SymbolKind.FUNCTION, SymbolKind.METHOD)
-                          and s.line_start <= line <= s.line_end]
+            candidates = [
+                s
+                for s in graph.symbols.values()
+                if s.file_path == file
+                and s.kind in (SymbolKind.FUNCTION, SymbolKind.METHOD)
+                and s.line_start <= line <= s.line_end
+            ]
             if candidates:
                 symbol = min(candidates, key=lambda s: s.line_end - s.line_start)
                 assigned.setdefault(symbol.id, []).append(line)
             else:
                 warnings.append(f"Changed line outside an indexed function: {file}:{line}")
-    return [ChangedFunction(symbol=graph.symbols[sid], changed_lines=numbers,
-                            caller_paths=caller_paths(graph, sid))
-            for sid, numbers in sorted(assigned.items())], warnings
+    return [
+        ChangedFunction(
+            symbol=graph.symbols[sid], changed_lines=numbers, caller_paths=caller_paths(graph, sid)
+        )
+        for sid, numbers in sorted(assigned.items())
+    ], warnings
 
 
-_SWAPS = {"+": "-", "-": "+", "==": "!=", "!=": "==", "<": ">=", "<=": ">",
-          ">": "<=", ">=": "<", "True": "False", "False": "True"}
+_SWAPS = {
+    "+": "-",
+    "-": "+",
+    "==": "!=",
+    "!=": "==",
+    "<": ">=",
+    "<=": ">",
+    ">": "<=",
+    ">=": "<",
+    "True": "False",
+    "False": "True",
+}
 
 
 def candidates(root: Path, functions: list[ChangedFunction]) -> list[Mutation]:
@@ -136,27 +174,41 @@ def candidates(root: Path, functions: list[ChangedFunction]) -> list[Mutation]:
             stack.extend(reversed(node.children))
             if node.type not in ("true", "false", "+", "-", "==", "!=", "<", "<=", ">", ">="):
                 continue
-            old = data[node.start_byte:node.end_byte].decode("utf-8")
+            old = data[node.start_byte : node.end_byte].decode("utf-8")
             if old not in _SWAPS:
                 continue
             if node.type not in ("true", "false") and (
-                node.parent is None or node.parent.type not in (
-                    "binary_operator", "comparison_operator",
+                node.parent is None
+                or node.parent.type
+                not in (
+                    "binary_operator",
+                    "comparison_operator",
                 )
             ):
                 continue
             line = node.start_point.row + 1
-            owner = next((f for f in functions if f.symbol.file_path == file
-                          and line in f.changed_lines), None)
+            owner = next(
+                (f for f in functions if f.symbol.file_path == file and line in f.changed_lines),
+                None,
+            )
             if owner is None:
                 continue
             replacement = _SWAPS[old]
-            mutated = data[:node.start_byte] + replacement.encode() + data[node.end_byte:]
+            mutated = data[: node.start_byte] + replacement.encode() + data[node.end_byte :]
             try:
                 compile(mutated, file, "exec")
             except (SyntaxError, ValueError):
                 continue
-            result.append(Mutation(id=f"M{len(result)+1:03d}", symbol_id=owner.symbol.id,
-                                   file=file, line=line, start_byte=node.start_byte,
-                                   end_byte=node.end_byte, original=old, replacement=replacement))
+            result.append(
+                Mutation(
+                    id=f"M{len(result) + 1:03d}",
+                    symbol_id=owner.symbol.id,
+                    file=file,
+                    line=line,
+                    start_byte=node.start_byte,
+                    end_byte=node.end_byte,
+                    original=old,
+                    replacement=replacement,
+                )
+            )
     return result

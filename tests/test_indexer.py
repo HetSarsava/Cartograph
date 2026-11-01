@@ -153,7 +153,9 @@ def test_on_event_emits_edge_discovered_for_every_edge_including_unresolved():
     assert emitted_edges == graph.edges
 
     unresolved_in_graph = [edge for edge in graph.edges if edge.target_id is None]
-    unresolved_in_events = [edge for edge in emitted_edges if edge is not None and edge.target_id is None]
+    unresolved_in_events = [
+        edge for edge in emitted_edges if edge is not None and edge.target_id is None
+    ]
     assert len(unresolved_in_events) == len(unresolved_in_graph)
 
 
@@ -181,12 +183,8 @@ def test_on_event_edge_resolution_started_comes_after_all_files_finished():
     events: list[IndexEvent] = []
     index_repo(FIXTURE_REPO, on_event=events.append)
 
-    last_file_finished_seq = max(
-        e.seq for e in events if e.kind == IndexEventKind.FILE_FINISHED
-    )
-    resolution_started = next(
-        e for e in events if e.kind == IndexEventKind.EDGE_RESOLUTION_STARTED
-    )
+    last_file_finished_seq = max(e.seq for e in events if e.kind == IndexEventKind.FILE_FINISHED)
+    resolution_started = next(e for e in events if e.kind == IndexEventKind.EDGE_RESOLUTION_STARTED)
     assert resolution_started.seq > last_file_finished_seq
 
 

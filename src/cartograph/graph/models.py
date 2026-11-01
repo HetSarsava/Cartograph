@@ -41,9 +41,7 @@ class Symbol(BaseModel):
 
     id: str = Field(description="Stable unique id: '{relative_file_path}::{qualified_name}'.")
     name: str = Field(description="Unqualified name, e.g. 'helper' or 'MyClass.method'.")
-    qualified_name: str = Field(
-        description="Dotted name within the module, e.g. 'MyClass.method'."
-    )
+    qualified_name: str = Field(description="Dotted name within the module, e.g. 'MyClass.method'.")
     kind: SymbolKind
     file_path: str = Field(description="Path to the defining file, relative to the repo root.")
     line_start: int = Field(ge=1, description="1-indexed line the definition starts on.")

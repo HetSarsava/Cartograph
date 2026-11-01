@@ -131,17 +131,11 @@ def _build_tree(graph: SymbolGraph) -> list[dict[str, Any]]:
         symbols = symbols_by_file.get(file_path)
         if not symbols:
             continue
-        roots = sorted(
-            (s for s in symbols if s.parent_id is None), key=lambda s: s.line_start
-        )
+        roots = sorted((s for s in symbols if s.parent_id is None), key=lambda s: s.line_start)
         children = [
             node
             for symbol in roots
-            if (
-                node := _symbol_node(
-                    symbol, graph, edges_by_source, children_by_parent, budget
-                )
-            )
+            if (node := _symbol_node(symbol, graph, edges_by_source, children_by_parent, budget))
             is not None
         ]
         file_nodes.append(
@@ -297,10 +291,7 @@ def _json_literal(data: Any) -> str:
 
 def _escape_html(text: str) -> str:
     return (
-        text.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
+        text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
     )
 
 

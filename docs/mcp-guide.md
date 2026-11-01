@@ -79,7 +79,7 @@ uv run python examples/mcp_client.py tests/fixtures/sample_repo --name add
 uv run pytest -q tests/test_mcp.py
 ```
 
-The example starts a separate Cartograph server, discovers nine tools,
+The example starts a separate Cartograph server, discovers ten tools,
 indexes the sample and queries a definition. The tests additionally exercise
 callers, impact, invalid arguments, write gating, a real codemod, pytest,
 snapshot/rollback and raw JSON-RPC messages.

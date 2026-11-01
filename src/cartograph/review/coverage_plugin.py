@@ -1,4 +1,5 @@
 """Explicit pytest plugin; records actual execution per pytest node ID."""
+
 from __future__ import annotations
 
 import json
@@ -34,8 +35,9 @@ class Recorder:
         elif report.skipped:
             self.outcomes.setdefault(report.nodeid, "skipped")
         elif report.when == "call":
-            self.outcomes.setdefault(report.nodeid, "xfail" if hasattr(report, "wasxfail")
-                                     else "passed")
+            self.outcomes.setdefault(
+                report.nodeid, "xfail" if hasattr(report, "wasxfail") else "passed"
+            )
 
     def pytest_sessionfinish(self, session):
         self.cov.stop()
@@ -49,17 +51,24 @@ class Recorder:
                     for line, values in data.contexts_by_lineno(filename).items()
                 }
                 try:
-                    executable[file.relative_to(self.root).as_posix()] = (
-                        self.cov.analysis2(filename)[1]
-                    )
+                    executable[file.relative_to(self.root).as_posix()] = self.cov.analysis2(
+                        filename
+                    )[1]
                 except coverage.exceptions.CoverageException:
                     # E.g. a syntactically invalid changed file. The baseline
                     # collection outcome still needs to be preserved as an error.
                     executable[file.relative_to(self.root).as_posix()] = []
-        self.output.write_text(json.dumps({"tests": self.outcomes, "coverage": contexts,
-                                           "executable_lines": executable,
-                                           "collection_errors": self.collection_errors}),
-                               encoding="utf-8")
+        self.output.write_text(
+            json.dumps(
+                {
+                    "tests": self.outcomes,
+                    "coverage": contexts,
+                    "executable_lines": executable,
+                    "collection_errors": self.collection_errors,
+                }
+            ),
+            encoding="utf-8",
+        )
 
 
 def pytest_configure(config):

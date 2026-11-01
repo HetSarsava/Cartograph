@@ -1,4 +1,5 @@
 """Real Git/pytest/coverage regressions for patch evidence, not mocked success."""
+
 from __future__ import annotations
 
 import json
@@ -24,18 +25,30 @@ def make_repo(root: Path, *, strong: bool = False) -> Path:
         "def checkout(subtotal, discount=0):\n    return total(subtotal, discount)\n",
         encoding="utf-8",
     )
-    test = ("from shop import checkout\nfrom pathlib import Path\n"
-            "def test_total():\n    Path('runtime_state.txt').write_text('isolated')\n"
-            "    assert checkout(100, 0) == 100\n")
+    test = (
+        "from shop import checkout\nfrom pathlib import Path\n"
+        "def test_total():\n    Path('runtime_state.txt').write_text('isolated')\n"
+        "    assert checkout(100, 0) == 100\n"
+    )
     if strong:
         test += "    assert checkout(100, 20) == 80\n"
     (root / "tests/test_shop.py").write_text(test, encoding="utf-8")
     git(root, "init", "-q")
     git(root, "add", ".")
-    git(root, "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
-        "commit", "-qm", "base")
+    git(
+        root,
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit",
+        "-qm",
+        "base",
+    )
     target = root / "shop.py"
-    target.write_text(target.read_text().replace("return subtotal\n", "return subtotal - discount\n"))
+    target.write_text(
+        target.read_text().replace("return subtotal\n", "return subtotal - discount\n")
+    )
     return root
 
 
@@ -50,6 +63,9 @@ def test_real_review_distinguishes_execution_from_detection(tmp_path, strong, ex
     assert report.baseline.status == "passed"
     assert report.status == "complete"
     assert report.source_matches_current
+    assert report.metrics.pytest_processes == 3
+    assert report.metrics.test_executions == 3
+    assert report.metrics.mutation_attempts == 1
     assert report.functions[0].tests_by_line[2] == ["tests/test_shop.py::test_total"]
     assert report.functions[0].uncovered_lines == []
     assert [m.status for m in report.mutations] == [expected]
@@ -85,10 +101,12 @@ def test_baseline_failure_never_credits_mutations(tmp_path):
 
 def test_unexecuted_and_budget_exhaustion(tmp_path):
     repo = make_repo(tmp_path / "repo")
-    (repo / "shop.py").write_text((repo / "shop.py").read_text()
-                                 + "\ndef unused(x):\n    return x + 1\n")
-    report = review(repo, "HEAD", repo / ".cartograph/review", ["tests"],
-                    max_mutations=0, timeout=20)
+    (repo / "shop.py").write_text(
+        (repo / "shop.py").read_text() + "\ndef unused(x):\n    return x + 1\n"
+    )
+    report = review(
+        repo, "HEAD", repo / ".cartograph/review", ["tests"], max_mutations=0, timeout=20
+    )
     assert {m.status for m in report.mutations} == {"budget_exhausted", "unexecuted"}
     assert all(m.run is None for m in report.mutations)
     assert report.status == "incomplete"
@@ -116,8 +134,7 @@ def test_git_diff_new_deleted_staged_and_module_changes(tmp_path):
 def test_mutations_preserve_unicode_and_ignore_comments_strings_and_other_lines(tmp_path):
     repo = make_repo(tmp_path / "repo")
     (repo / "shop.py").write_text(
-        "# café + True\ndef total(x, discount=0):\n"
-        "    text = '+ True'\n    return x >= discount\n",
+        "# café + True\ndef total(x, discount=0):\n    text = '+ True'\n    return x >= discount\n",
         encoding="utf-8",
     )
     graph = index_repo(repo, use_cache=False)
@@ -126,17 +143,20 @@ def test_mutations_preserve_unicode_and_ignore_comments_strings_and_other_lines(
     assert [(m.line, m.original, m.replacement) for m in mutations] == [(4, ">=", "<")]
     source = (repo / "shop.py").read_bytes()
     m = mutations[0]
-    assert source[m.start_byte:m.end_byte] == b">="
+    assert source[m.start_byte : m.end_byte] == b">="
 
 
-@pytest.mark.parametrize("run,expected", [
-    (RunEvidence(status="passed", tests={"t": "passed"}), "survived"),
-    (RunEvidence(status="failed", tests={"t": "failed"}), "detected"),
-    (RunEvidence(status="error", tests={"t": "failed"}), "error"),
-    (RunEvidence(status="timeout"), "timeout"),
-    (RunEvidence(status="passed", tests={"other": "passed"}), "error"),
-    (RunEvidence(status="passed", tests={"t": "skipped", "other": "passed"}), "error"),
-])
+@pytest.mark.parametrize(
+    "run,expected",
+    [
+        (RunEvidence(status="passed", tests={"t": "passed"}), "survived"),
+        (RunEvidence(status="failed", tests={"t": "failed"}), "detected"),
+        (RunEvidence(status="error", tests={"t": "failed"}), "error"),
+        (RunEvidence(status="timeout"), "timeout"),
+        (RunEvidence(status="passed", tests={"other": "passed"}), "error"),
+        (RunEvidence(status="passed", tests={"t": "skipped", "other": "passed"}), "error"),
+    ],
+)
 def test_process_failures_and_missing_tests_are_not_detection(run, expected):
     assert classify_mutation(run, ["t"]) == expected
 
@@ -156,8 +176,10 @@ def test_cli_and_html_escape_repository_content(tmp_path):
     repo = make_repo(tmp_path / "repo")
     target = repo / "shop.py"
     target.write_text(target.read_text() + "# <script>alert('x')</script>\n")
-    result = CliRunner().invoke(cli, ["review", "--base", "HEAD", "--repo", str(repo),
-                                      "--fail-on-survivor", "--timeout", "20"])
+    result = CliRunner().invoke(
+        cli,
+        ["review", "--base", "HEAD", "--repo", str(repo), "--fail-on-survivor", "--timeout", "20"],
+    )
     assert result.exit_code == 1, result.output
     html = (repo / ".cartograph/review/report.html").read_text(encoding="utf-8")
     assert "<script>" not in html

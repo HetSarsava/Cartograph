@@ -30,6 +30,7 @@ def sample_repo(tmp_path):
     shutil.copytree(FIXTURE_REPO, dest)
     return dest
 
+
 AMBIGUOUS_SYMBOL_ID = (
     "tests/test_legacy_unittest_ambiguous.py::AmbiguousAssertionTests.test_add_in_expected_set"
 )
@@ -70,9 +71,7 @@ def test_pipeline_quarantines_ambiguous_step_without_looping(sample_repo, decisi
     with (
         patch("cartograph.pipeline.nodes.run_scout", return_value=mock_scout) as scout_mock,
         patch("cartograph.pipeline.nodes.run_planner", return_value=mock_planner) as planner_mock,
-        patch(
-            "cartograph.pipeline.nodes.run_rewriter", wraps=real_run_rewriter
-        ) as rewriter_mock,
+        patch("cartograph.pipeline.nodes.run_rewriter", wraps=real_run_rewriter) as rewriter_mock,
         patch(
             "cartograph.pipeline.nodes.run_adjudicator", return_value=mock_adjudication
         ) as adjudicator_mock,
@@ -120,24 +119,35 @@ def test_pipeline_runs_end_to_end_with_real_agents(sample_repo):
     assert final_state["reporter_result"].report_markdown.strip() != ""
     # Every planned step should end up in exactly one of these two buckets.
     total_steps = len(final_state.get("plan_steps_done", []))
-    assert len(final_state.get("committed_symbol_ids", [])) + len(
-        final_state.get("quarantined_symbol_ids", [])
-    ) == total_steps
+    assert (
+        len(final_state.get("committed_symbol_ids", []))
+        + len(final_state.get("quarantined_symbol_ids", []))
+        == total_steps
+    )
 
 
 @pytest.mark.parametrize("count", [0, 40])
 def test_empty_and_long_plans_need_no_graph_loop(sample_repo, count):
     from cartograph.agents.rewriter import RewriterResponse
+
     steps = [PlanStep(symbol_id=f"a.py::f{i}", action="review") for i in range(count)]
     with (
-        patch("cartograph.pipeline.nodes.run_scout",
-              return_value=ScoutResponse(relevant_symbol_ids=[], reasoning="test")),
-        patch("cartograph.pipeline.nodes.run_planner",
-              return_value=PlannerResponse(steps=steps, summary="test")),
-        patch("cartograph.pipeline.nodes.run_rewriter",
-              return_value=RewriterResponse(success=False, final_summary="no recipe")) as rewrite,
-        patch("cartograph.pipeline.nodes.run_reporter",
-              return_value=ReporterResponse(report_markdown="test")),
+        patch(
+            "cartograph.pipeline.nodes.run_scout",
+            return_value=ScoutResponse(relevant_symbol_ids=[], reasoning="test"),
+        ),
+        patch(
+            "cartograph.pipeline.nodes.run_planner",
+            return_value=PlannerResponse(steps=steps, summary="test"),
+        ),
+        patch(
+            "cartograph.pipeline.nodes.run_rewriter",
+            return_value=RewriterResponse(success=False, final_summary="no recipe"),
+        ) as rewrite,
+        patch(
+            "cartograph.pipeline.nodes.run_reporter",
+            return_value=ReporterResponse(report_markdown="test"),
+        ),
     ):
         result = build_graph().invoke({"repo_path": str(sample_repo), "task_description": "test"})
     assert rewrite.call_count == count
@@ -148,16 +158,30 @@ def test_empty_and_long_plans_need_no_graph_loop(sample_repo, count):
 def test_successful_step_rewrites_and_tests(sample_repo):
     symbol_id = "tests/test_legacy_unittest.py::ArithmeticTests.test_add"
     with (
-        patch("cartograph.pipeline.nodes.run_scout",
-              return_value=ScoutResponse(relevant_symbol_ids=[symbol_id], reasoning="test")),
-        patch("cartograph.pipeline.nodes.run_planner", return_value=PlannerResponse(
-            steps=[PlanStep(symbol_id=symbol_id, action="convert",
-                            recipe_name="unittest_to_pytest")], summary="test")),
+        patch(
+            "cartograph.pipeline.nodes.run_scout",
+            return_value=ScoutResponse(relevant_symbol_ids=[symbol_id], reasoning="test"),
+        ),
+        patch(
+            "cartograph.pipeline.nodes.run_planner",
+            return_value=PlannerResponse(
+                steps=[
+                    PlanStep(
+                        symbol_id=symbol_id, action="convert", recipe_name="unittest_to_pytest"
+                    )
+                ],
+                summary="test",
+            ),
+        ),
         patch("cartograph.pipeline.nodes.run_adjudicator") as adjudicate,
-        patch("cartograph.pipeline.nodes.run_reporter",
-              return_value=ReporterResponse(report_markdown="test")),
+        patch(
+            "cartograph.pipeline.nodes.run_reporter",
+            return_value=ReporterResponse(report_markdown="test"),
+        ),
     ):
-        result = build_graph().invoke({"repo_path": str(sample_repo), "task_description": "convert"})
+        result = build_graph().invoke(
+            {"repo_path": str(sample_repo), "task_description": "convert"}
+        )
     assert symbol_id in result["committed_symbol_ids"]
     assert not result["quarantined_symbol_ids"]
     adjudicate.assert_not_called()
@@ -176,22 +200,36 @@ def test_rewriter_restores_even_when_a_dependency_raises(tmp_path, failure):
     target = tmp_path / "test_a.py"
     original = "import unittest\nclass T(unittest.TestCase):\n    def test_a(self):\n        self.assertEqual(1, 2)\n"
     target.write_text(original)
-    request = RewriterRequest(repo_path=str(tmp_path), task_description="convert",
-        plan_step=PlanStep(symbol_id="test_a.py::T.test_a", action="convert",
-                           recipe_name="unittest_to_pytest"))
+    request = RewriterRequest(
+        repo_path=str(tmp_path),
+        task_description="convert",
+        plan_step=PlanStep(
+            symbol_id="test_a.py::T.test_a", action="convert", recipe_name="unittest_to_pytest"
+        ),
+    )
     provider = Mock()
     provider.complete_structured.side_effect = ProviderError("offline")
-    bad_tests = TestRunResult(command=[], return_code=1, total=1, passed=0,
-                             failed=1, errors=0, skipped=0, duration_seconds=0)
+    bad_tests = TestRunResult(
+        command=[],
+        return_code=1,
+        total=1,
+        passed=0,
+        failed=1,
+        errors=0,
+        skipped=0,
+        duration_seconds=0,
+    )
+
     def corrupt_then_raise(*args, **kwargs):
         target.write_text("partially written")
         raise RuntimeError("tool crashed")
+
     if failure == "codemod":
-        context = patch("cartograph.agents.rewriter.apply_codemod",
-                        side_effect=corrupt_then_raise)
+        context = patch("cartograph.agents.rewriter.apply_codemod", side_effect=corrupt_then_raise)
     elif failure == "test_runner":
-        context = patch("cartograph.agents.rewriter.run_tests",
-                        side_effect=RuntimeError("tool crashed"))
+        context = patch(
+            "cartograph.agents.rewriter.run_tests", side_effect=RuntimeError("tool crashed")
+        )
     else:
         context = patch("cartograph.agents.rewriter.run_tests", return_value=bad_tests)
     with context, pytest.raises((ProviderError, RuntimeError)):

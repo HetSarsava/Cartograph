@@ -100,7 +100,9 @@ def run_rewriter(provider: Provider, request: RewriterRequest) -> RewriterRespon
     step = request.plan_step
 
     if not step.recipe_name:
-        logger.info("[rewriter] step %s has no recipe_name; nothing executable this pass", step.symbol_id)
+        logger.info(
+            "[rewriter] step %s has no recipe_name; nothing executable this pass", step.symbol_id
+        )
         attempt = RewriteAttempt(
             turn=1,
             description=(
@@ -109,13 +111,19 @@ def run_rewriter(provider: Provider, request: RewriterRequest) -> RewriterRespon
             ),
         )
         return RewriterResponse(
-            success=False, attempts=[attempt], final_summary="No recipe specified; nothing to apply."
+            success=False,
+            attempts=[attempt],
+            final_summary="No recipe specified; nothing to apply.",
         )
 
     recipe = get_recipe(step.recipe_name)
     if recipe is None:
-        logger.warning("[rewriter] step %s named unknown recipe %r", step.symbol_id, step.recipe_name)
-        attempt = RewriteAttempt(turn=1, description=f"Recipe {step.recipe_name!r} is not registered.")
+        logger.warning(
+            "[rewriter] step %s named unknown recipe %r", step.symbol_id, step.recipe_name
+        )
+        attempt = RewriteAttempt(
+            turn=1, description=f"Recipe {step.recipe_name!r} is not registered."
+        )
         return RewriterResponse(
             success=False, attempts=[attempt], final_summary=f"Unknown recipe {step.recipe_name!r}."
         )
@@ -141,7 +149,9 @@ def run_rewriter(provider: Provider, request: RewriterRequest) -> RewriterRespon
     )
 
     try:
-        codemod_result = apply_codemod(request.repo_path, step.recipe_name, target_files=[target_file])
+        codemod_result = apply_codemod(
+            request.repo_path, step.recipe_name, target_files=[target_file]
+        )
     except Exception:
         rollback(request.repo_path, snap.snapshot_id)
         raise
@@ -175,7 +185,9 @@ def run_rewriter(provider: Provider, request: RewriterRequest) -> RewriterRespon
             description=f"Recipe {step.recipe_name!r} made no changes to {target_file} (nothing to convert).",
         )
         return RewriterResponse(
-            success=True, attempts=[attempt], final_summary="Nothing to change; file already compliant."
+            success=True,
+            attempts=[attempt],
+            final_summary="Nothing to change; file already compliant.",
         )
 
     try:
@@ -236,11 +248,11 @@ def run_rewriter(provider: Provider, request: RewriterRequest) -> RewriterRespon
     diagnosis: _FailureDiagnosis | None = None
     if request.max_turns >= 2:
         diagnosis = _diagnose_failure(provider, request, target_file, test_result)
-        attempts.append(RewriteAttempt(turn=len(attempts) + 1, description=f"Diagnosis: {diagnosis.root_cause}"))
+        attempts.append(
+            RewriteAttempt(turn=len(attempts) + 1, description=f"Diagnosis: {diagnosis.root_cause}")
+        )
 
-    final_summary = (
-        f"Tests failed after applying {step.recipe_name!r} to {target_file}; changes were rolled back."
-    )
+    final_summary = f"Tests failed after applying {step.recipe_name!r} to {target_file}; changes were rolled back."
     if diagnosis is not None:
         final_summary += f" Diagnosis: {diagnosis.root_cause}"
 

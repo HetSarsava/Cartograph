@@ -84,7 +84,9 @@ def blast_radius(graph: SymbolGraph, symbol_id: str, max_depth: int | None = Non
 
     visited = {symbol_id}
     result: list[Symbol] = []
-    queue: deque[tuple[str, int]] = deque((caller, 1) for caller in reverse_adjacency.get(symbol_id, set()))
+    queue: deque[tuple[str, int]] = deque(
+        (caller, 1) for caller in reverse_adjacency.get(symbol_id, set())
+    )
     queue_seen = {caller for caller, _ in queue}
     visited.update(queue_seen)
 

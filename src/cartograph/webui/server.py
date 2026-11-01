@@ -146,21 +146,19 @@ def build_tree(repo_path: str, logs_dir: Path = LOGS_DIR) -> BuildResult:
     if not candidate.exists():
         return BuildResult(ok=False, repo_path=repo_path, error=f"Path does not exist: {candidate}")
     if not candidate.is_dir():
-        return BuildResult(
-            ok=False, repo_path=repo_path, error=f"Not a directory: {candidate}"
-        )
+        return BuildResult(ok=False, repo_path=repo_path, error=f"Not a directory: {candidate}")
 
     start = time.monotonic()
     try:
         graph = index_repo(candidate)
-    except Exception as exc:  # noqa: BLE001 - surface any indexer failure in the UI
+    except Exception as exc:
         logger.exception("[webui] indexing failed for %s", candidate)
         return BuildResult(ok=False, repo_path=repo_path, error=f"Indexing failed: {exc}")
 
     filename = _unique_tree_filename(logs_dir)
     try:
         written = export_tree_html(graph, logs_dir / filename)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.exception("[webui] tree export failed for %s", candidate)
         return BuildResult(ok=False, repo_path=repo_path, error=f"Export failed: {exc}")
 
@@ -273,7 +271,7 @@ class _Handler(BaseHTTPRequestHandler):
     def _send_dict(self, status: int, payload: dict) -> None:
         self._send(status, json.dumps(payload).encode("utf-8"), "application/json")
 
-    def do_GET(self) -> None:  # noqa: N802 - http.server API
+    def do_GET(self) -> None:
         try:
             if self.path == "/" or self.path.startswith("/?"):
                 self._send(200, PAGE.encode("utf-8"), "text/html; charset=utf-8")
@@ -339,11 +337,11 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send(204, b"", "image/x-icon")
                 return
             self._send(404, b"Not found", "text/plain")
-        except Exception:  # noqa: BLE001 - a bad request must not kill the server
+        except Exception:
             logger.exception("[webui] GET %s failed", self.path)
             self._send(500, b"Internal error", "text/plain")
 
-    def do_POST(self) -> None:  # noqa: N802 - http.server API
+    def do_POST(self) -> None:
         try:
             if self.path == "/api/migrate":
                 if not get_settings().groq_api_key:
@@ -353,9 +351,7 @@ class _Handler(BaseHTTPRequestHandler):
                     self._send_dict(409, {"error": "A migration is already running."})
                     return
                 logger.info("[webui] starting migration demo")
-                job_id = _jobs.start(
-                    lambda job, lock: run_migration_demo(job, lock, LOGS_DIR)
-                )
+                job_id = _jobs.start(lambda job, lock: run_migration_demo(job, lock, LOGS_DIR))
                 self._send_dict(200, {"job_id": job_id})
                 return
             if self.path != "/api/build":
@@ -379,7 +375,7 @@ class _Handler(BaseHTTPRequestHandler):
             logger.info("[webui] building tree for %s", repo_path)
             result = build_tree(repo_path)
             self._send_json(200 if result.ok else 400, result)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.exception("[webui] POST %s failed", self.path)
             self._send_json(500, BuildResult(ok=False, repo_path="", error=str(exc)))
 

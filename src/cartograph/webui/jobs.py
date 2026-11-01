@@ -55,7 +55,7 @@ class _JobLogHandler(logging.Handler):
             return
         try:
             message = record.getMessage()
-        except Exception:  # a bad format string must not break the run
+        except (KeyError, TypeError, ValueError):  # bad formatting must not break the run
             return
         with self._lock:
             self._job.lines.append(message)

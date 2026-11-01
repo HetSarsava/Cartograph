@@ -1,4 +1,5 @@
 """Run a real MCP client without an LLM: uv run python examples/mcp_client.py PATH."""
+
 import argparse
 import asyncio
 import json
@@ -28,4 +29,3 @@ if __name__ == "__main__":
     parser.add_argument("--name", default="add")
     args = parser.parse_args()
     asyncio.run(main(args.repo, args.name))
-

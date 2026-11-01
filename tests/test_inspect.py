@@ -64,11 +64,13 @@ def _clean_cache():
 
 
 def test_search_ranks_exact_then_prefix_then_substring():
-    graph = _graph([
-        _sym("a.py::run", "run"),
-        _sym("a.py::run_reporter", "run_reporter"),
-        _sym("a.py::dry_run_all", "dry_run_all"),
-    ])
+    graph = _graph(
+        [
+            _sym("a.py::run", "run"),
+            _sym("a.py::run_reporter", "run_reporter"),
+            _sym("a.py::dry_run_all", "dry_run_all"),
+        ]
+    )
 
     names = [r["name"] for r in search_symbols(graph, "run")]
 
@@ -162,7 +164,11 @@ def test_unresolved_call_to_a_duplicated_name_is_reported_as_ambiguous():
     shrugging with 'unresolved'."""
     caller = _sym("a.py::caller", "caller")
     graph = _graph(
-        [caller, _sym("b.py::dup", "dup", file_path="b.py"), _sym("c.py::dup", "dup", file_path="c.py")],
+        [
+            caller,
+            _sym("b.py::dup", "dup", file_path="b.py"),
+            _sym("c.py::dup", "dup", file_path="c.py"),
+        ],
         [_edge(caller.id, None, name="dup")],
     )
 
@@ -335,4 +341,3 @@ def test_repeated_calls_in_both_directions_still_collapse_to_one_link():
 
     assert len(edges) == 1
     assert edges[0]["both"] is True
-

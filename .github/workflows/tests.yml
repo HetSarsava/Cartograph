@@ -17,5 +17,11 @@ jobs:
           version: "0.9.26"
       - run: uv python install 3.12
       - run: uv sync --frozen --extra dev --python 3.12
-      - run: uv run --frozen ruff check --select E4,E7,E9,F src tests examples scripts
-      - run: uv run --frozen pytest -q
+      - name: Lint
+        run: uv run --frozen ruff check .
+      - name: Check formatting
+        run: uv run --frozen ruff format --check .
+      - name: Type check
+        run: uv run --frozen mypy src/cartograph
+      - name: Tests
+        run: uv run --frozen pytest -q

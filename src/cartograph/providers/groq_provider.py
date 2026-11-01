@@ -10,9 +10,12 @@ from __future__ import annotations
 import json
 import logging
 import time
+from typing import cast
 
 from groq import Groq
 from groq.types.chat import ChatCompletion
+from groq.types.chat.chat_completion_message_param import ChatCompletionMessageParam
+from groq.types.chat.completion_create_params import ResponseFormatResponseFormatJsonObject
 from pydantic import ValidationError
 
 from cartograph.providers.base import LLMMessage, Provider, ProviderError, ResponseModelT
@@ -54,7 +57,11 @@ class CallStats:
         self.failed_call_count += 1
 
     def reset(self) -> None:
-        self.__init__()  # noqa: PLC2801 - simplest correct way to reset all fields
+        self.call_count = 0
+        self.failed_call_count = 0
+        self.total_prompt_tokens = 0
+        self.total_completion_tokens = 0
+        self.total_tokens = 0
 
 
 call_stats = CallStats()
@@ -85,11 +92,14 @@ class GroqProvider:
         try:
             completion = self._client.chat.completions.create(
                 model=self._model,
-                messages=[{"role": m.role, "content": m.content} for m in messages],
+                messages=[
+                    cast(ChatCompletionMessageParam, {"role": m.role, "content": m.content})
+                    for m in messages
+                ],
                 temperature=temperature,
                 max_tokens=max_tokens,
             )
-        except Exception as exc:  # noqa: BLE001 - normalize all SDK errors
+        except Exception as exc:
             call_stats.record_failure()
             logger.error(
                 "[provider:groq] request failed model=%s latency_ms=%.1f error=%s",
@@ -126,13 +136,16 @@ class GroqProvider:
             completion = self._client.chat.completions.create(
                 model=self._model,
                 messages=[
-                    {"role": m.role, "content": m.content} for m in (schema_message, *messages)
+                    cast(ChatCompletionMessageParam, {"role": m.role, "content": m.content})
+                    for m in (schema_message, *messages)
                 ],
                 temperature=temperature,
                 max_tokens=max_tokens,
-                response_format={"type": "json_object"},
+                response_format=cast(
+                    ResponseFormatResponseFormatJsonObject, {"type": "json_object"}
+                ),
             )
-        except Exception as exc:  # noqa: BLE001 - normalize all SDK errors
+        except Exception as exc:
             call_stats.record_failure()
             logger.error(
                 "[provider:groq] request failed model=%s latency_ms=%.1f error=%s",

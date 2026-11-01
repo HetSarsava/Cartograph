@@ -7,7 +7,7 @@ boundary; LangGraph remains a separate small migration example.
 ```mermaid
 flowchart LR
     Host["AI host + MCP client"] -->|"JSON-RPC 2.0 over stdio"| SDK["Official MCP SDK"]
-    SDK --> Tools["Nine Cartograph tools"]
+    SDK --> Tools["Ten Cartograph tools"]
     Tools --> Index["tree-sitter symbol graph"]
     Tools --> Actions["libcst / pytest / Git"]
     Workflow["Minimal LangGraph workflow"] -->|"ordinary Python calls"| Actions
@@ -16,7 +16,8 @@ flowchart LR
     Review["review CLI"] --> Index
     Review --> Evidence["Disposable pytest baseline, contexts, controls, mutants"]
     Evidence --> Report["HTML + JSON report"]
-    Tools -->|"read_review_report; no execution"| Report
+    Tools -->|"review_patch; allow-execution"| Review
+    Tools -->|"read_review_report"| Report
 ```
 
 ## MCP: what is actually implemented
@@ -33,7 +34,7 @@ Modern discovery and the legacy initialize handshake are both exercised with
 a separate SDK client process. A raw subprocess test also checks JSON-RPC
 version fields, correlated IDs, tool calls and a `-32601` unknown-method error.
 
-Nine tools are exposed:
+Ten tools are exposed:
 
 | Tool | Purpose |
 | --- | --- |
@@ -45,10 +46,8 @@ Nine tools are exposed:
 | snapshot | Capture tracked and non-ignored files in a Git object |
 | rollback | Restore files and the index from a snapshot |
 | apply_codemod | Apply a registered deterministic libcst recipe |
-| read_review_report | Read the CLI-generated evidence report and flag changed source |
-
-The previous ninth registration, `pack_context`, raised `NotImplementedError`.
-It is no longer advertised. Its Python prototype is still explicitly deferred.
+| read_review_report | Read the generated evidence report and flag changed source |
+| review_patch | Run patch evidence and return bounded agent-repair feedback |
 
 Each server is bound to one repository at startup. Query calls hash the names
 and contents of the current Python files. An unchanged fingerprint reuses the
@@ -83,8 +82,10 @@ operator mutations. `coverage_plugin.py` associates executable lines with actual
 pytest node IDs. `engine.py` runs a baseline, verifies each selected test set on
 unmutated source, and checks one mutant per fresh disposable copy. Failed controls,
 timeouts and collection errors are inconclusive. `render.py` writes escaped HTML
-and a versioned JSON report; the MCP reader recalculates the source digest.
-No model or LangGraph stage is involved. [Full behavior and limits](change-review.md).
+and a versioned JSON report with runtime and execution counts. `review_patch`
+returns compact findings, bounded log context and a two-round repair budget to
+the coding agent; the agent, not Cartograph, edits code. `read_review_report`
+recalculates source freshness. [Full behavior and limits](change-review.md).
 
 ## LangGraph: four sequential stages, five roles
 
@@ -126,8 +127,8 @@ transaction; filesystem/Git failures can still make rollback fail.
   It does not establish tokenizer-level savings, model quality or speed.
 - No live Groq result is claimed by offline tests. The live-provider test
   runs only when a key is configured.
-- Legacy context-budget and run-budget settings remain advisory/deferred;
-  there is no enforced model token budget. The per-step routing budget was
-  removed with the retry graph.
+- No model-token budget is enforced. Review subprocess timeouts and repair-round
+  limits bound verification work, while provider token counts are reported only
+  when the model API supplies them.
 
 See [MCP learning guide](mcp-guide.md) for setup and protocol examples.

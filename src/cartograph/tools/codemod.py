@@ -4,9 +4,8 @@ Codemods never use regex-based text editing — every rewrite goes through
 libcst so it operates on a real syntax tree and can report *ambiguity*
 (constructs it isn't confident it understood) instead of silently guessing.
 `apply_codemod()` is the generic driver: it loads files, hands each one's
-CST to a `Recipe`, collects ambiguities, and only writes changes back when
-the recipe is confident (subject to whatever ambiguity-tolerance policy is
-implemented — see the TODO below).
+CST to a `Recipe`, collects ambiguities, and writes a file only when that
+file's rewrite has no unresolved ambiguities.
 """
 
 from __future__ import annotations
@@ -101,8 +100,7 @@ class Recipe(Protocol):
     ) -> tuple[cst.Module, list[CodemodAmbiguity]]:
         """Return a rewritten module plus any ambiguities encountered.
 
-        If ambiguities is non-empty, `apply_codemod()` may choose not to
-        write the result back (policy TODO — see `apply_codemod`).
+        If ambiguities is non-empty, `apply_codemod()` leaves the file unchanged.
         """
         ...
 
@@ -157,7 +155,9 @@ def apply_codemod(
         raise KeyError(f"No recipe registered as {recipe_name!r}. Known: {list_recipes()}")
 
     root = Path(repo_path).resolve()
-    candidates = target_files if target_files is not None else list(_iter_relative_python_files(root))
+    candidates = (
+        target_files if target_files is not None else list(_iter_relative_python_files(root))
+    )
 
     files_changed: list[str] = []
     ambiguities: list[CodemodAmbiguity] = []

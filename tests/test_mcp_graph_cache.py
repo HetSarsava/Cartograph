@@ -1,4 +1,5 @@
 """Graph reuse must not trade freshness for speed or write into the repository."""
+
 import os
 from concurrent.futures import ThreadPoolExecutor
 

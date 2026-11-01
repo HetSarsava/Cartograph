@@ -1,4 +1,4 @@
-"""Central configuration: env loading, provider keys, and run budgets.
+"""Central configuration: environment loading, provider keys and test limits.
 
 Backed by `.env` (see `.env.example` for the full variable list) and process
 environment variables, with real environment variables taking precedence
@@ -28,18 +28,6 @@ class Settings(BaseSettings):
         description="Default Groq model id. Must support JSON mode — see `groq.models.list()`.",
     )
 
-    max_llm_calls_per_run: int = Field(
-        default=25,
-        ge=1,
-        validation_alias="CARTOGRAPH_MAX_LLM_CALLS_PER_RUN",
-        description="Reserved advisory setting; not currently enforced.",
-    )
-    max_context_tokens: int = Field(
-        default=8000,
-        gt=0,
-        validation_alias="CARTOGRAPH_MAX_CONTEXT_TOKENS",
-        description="Reserved for the deferred context packer; not currently enforced.",
-    )
     test_timeout_seconds: int = Field(
         default=120,
         gt=0,

@@ -4,6 +4,7 @@ Five roles remain: Scout, Planner, Rewriter, Adjudicator and Reporter.
 Per-step execution is an ordinary bounded Python loop in nodes.execute_plan_node.
 There are no graph cycles, checkpoint stores, reducers or nested graphs.
 """
+
 from __future__ import annotations
 
 from langgraph.graph import END, START, StateGraph

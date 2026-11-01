@@ -74,7 +74,9 @@ def snapshot(repo_path: str | Path, label: str | None = None) -> SnapshotResult:
         temp_index = Path(tmp_dir) / "index"
         env = {"GIT_INDEX_FILE": str(temp_index)}
 
-        head_sha = _try_run_git(root, ["rev-parse", "--verify", "HEAD"], env=env)  # None if unborn HEAD
+        head_sha = _try_run_git(
+            root, ["rev-parse", "--verify", "HEAD"], env=env
+        )  # None if unborn HEAD
         if head_sha is not None:
             _run_git(root, ["read-tree", "HEAD"], env=env)
 
@@ -86,7 +88,9 @@ def snapshot(repo_path: str | Path, label: str | None = None) -> SnapshotResult:
             commit_args += ["-p", head_sha]
         commit_sha = _run_git(root, commit_args, env=_GIT_AUTHOR)
 
-        files_captured = len(_run_git(root, ["ls-tree", "-r", "--name-only", tree_sha]).splitlines())
+        files_captured = len(
+            _run_git(root, ["ls-tree", "-r", "--name-only", tree_sha]).splitlines()
+        )
 
     return SnapshotResult(
         snapshot_id=commit_sha,
@@ -153,6 +157,7 @@ def _run_git(root: Path, args: list[str], env: dict[str, str] | None = None) -> 
         capture_output=True,
         text=True,
         env=_merged_env(env),
+        check=False,
     )
     if proc.returncode != 0:
         raise GitError(f"git {' '.join(args)} failed: {proc.stderr.strip()}")
@@ -166,6 +171,7 @@ def _try_run_git(root: Path, args: list[str], env: dict[str, str] | None = None)
         capture_output=True,
         text=True,
         env=_merged_env(env),
+        check=False,
     )
     if proc.returncode != 0:
         return None

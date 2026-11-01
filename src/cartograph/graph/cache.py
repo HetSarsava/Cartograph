@@ -75,9 +75,7 @@ def load_cache(cache_dir: Path) -> CacheManifest | None:
         manifest = CacheManifest.model_validate(json.loads(raw))
     except (OSError, ValueError) as exc:
         # JSONDecodeError and pydantic.ValidationError are both ValueErrors.
-        logger.warning(
-            "[indexer] ignoring unreadable cache manifest %s: %s", manifest_path, exc
-        )
+        logger.warning("[indexer] ignoring unreadable cache manifest %s: %s", manifest_path, exc)
         return None
     if manifest.cache_version != _CACHE_VERSION:
         logger.warning(

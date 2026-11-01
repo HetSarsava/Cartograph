@@ -12,6 +12,7 @@ Every node logs its own entry/exit tagged `[orchestrator]`, plus the run's
 from __future__ import annotations
 
 import logging
+from typing import cast
 
 from cartograph.agents.adjudicator import AdjudicatorRequest, run_adjudicator
 from cartograph.agents.planner import PlannerRequest, run_planner
@@ -72,7 +73,11 @@ def scout_node(state: RunState) -> dict:
     )
     result = run_scout(_build_provider(), request)
 
-    logger.info("[orchestrator] thread=%s exit scout relevant=%d", thread_id, len(result.relevant_symbol_ids))
+    logger.info(
+        "[orchestrator] thread=%s exit scout relevant=%d",
+        thread_id,
+        len(result.relevant_symbol_ids),
+    )
     return {"scout_result": result}
 
 
@@ -217,12 +222,12 @@ def execute_plan_node(state: RunState) -> dict:
     Rewriter already snapshots, tests and restores failures. Retrying the same
     deterministic recipe cannot repair it. Adjudicator gives advice only.
     """
-    working = dict(state)
+    working: dict[str, object] = dict(state)
     for _step in list(state.get("plan_steps_remaining", [])):
-        working.update(rewrite_step_node(working))
+        working.update(rewrite_step_node(cast(RunState, working)))
         if working.get("pending_ambiguities"):
-            working.update(adjudicate_node(working))
-        working.update(finish_step_node(working))
+            working.update(adjudicate_node(cast(RunState, working)))
+        working.update(finish_step_node(cast(RunState, working)))
     working["final_tests"] = run_tests(
         state["repo_path"], timeout_seconds=get_settings().test_timeout_seconds
     )
@@ -258,8 +263,7 @@ def reporter_node(state: RunState) -> dict:
         notes=[
             f"{len(committed)} target(s) committed, {len(quarantined)} quarantined.",
             "Quarantined targets were left byte-for-byte unchanged on disk.",
-            "Committed targets had only their assertions rewritten; class "
-            "structure and test names are unchanged.",
+            "Committed targets had only their assertions rewritten; class structure and test names are unchanged.",
         ],
     )
     result = run_reporter(_build_provider(), request)

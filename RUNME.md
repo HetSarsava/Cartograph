@@ -8,8 +8,8 @@ an LLM in the loop for judgment only.
 An API key is optional — most of it runs without one.
 
 ```bash
-git clone https://github.com/HetSarsava/Cartographer.git
-cd Cartographer
+git clone https://github.com/HetSarsava/Cartograph.git
+cd Cartograph
 uv sync --extra dev
 ```
 
@@ -24,7 +24,7 @@ uv run cartograph serve               # opens http://127.0.0.1:8765
 
 In the browser, on the **Explore** tab, click **Cartograph's own source**:
 
-- `217 symbols · 1094 edges · 265 resolved · 829 unresolved · 38 files`
+- `281 symbols · 1743 edges · 385 resolved · 1358 unresolved · 49 files`
 - A dependency map renders inline. Toggle **List / Diagram** for the
   node-link view — drag to pan, scroll to zoom, click a node to fold it.
 
@@ -119,7 +119,7 @@ $env:Path += ";$env:APPDATA\Python\Python312\Scripts"
 
 ## Things that look wrong but aren't
 
-- **829 of 1094 edges unresolved.** Deliberate. `x.foo()` on a receiver whose
+- **1358 of 1743 edges unresolved.** Deliberate. `x.foo()` on a receiver whose
   type isn't known is left unresolved rather than bound to whichever `foo`
   happens to be unique. Guessing once attached 71 dict `.get()` calls to one
   unrelated method and put it in everything's blast radius. Most unresolved
@@ -132,7 +132,7 @@ $env:Path += ";$env:APPDATA\Python\Python312\Scripts"
 Full detail is in [README.md](README.md).
 
 See [MCP setup and learning guide](docs/mcp-guide.md) for client configuration,
-the nine-tool discovery demo, and the explicit execution flag. LangGraph is now a
+the ten-tool discovery demo, and the explicit execution flag. LangGraph is now a
 four-stage sequence without checkpoints or graph retry loops.
 
 For the new patch-verification workflow, see [change review](docs/change-review.md):
